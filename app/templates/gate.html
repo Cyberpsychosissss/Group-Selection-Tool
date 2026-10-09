@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>口令</h1>
+  <form method="post" action="/gate" class="row">
+    <input type="hidden" name="next" value="{{ next }}">
+    <input name="code" required autofocus autocomplete="off" placeholder="见课程群" class="mono">
+    <button class="primary">进入</button>
+  </form>
+</section>
+{% endblock %}

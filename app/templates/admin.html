@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>管理</h1>
+  <p>登记 {{ stats.members }} 人；池：{% for state, n in stats.pools.items() %}{{ state }} {{ n }}{% if not loop.last %}，{% endif %}{% else %}无{% endfor %}</p>
+</section>
+<section class="card danger">
+  <h2>删除全部数据</h2>
+  <p class="muted small">成员、池、互选、方案、记录全部删除并压缩数据库，不可恢复。</p>
+  <form method="post" action="/admin/purge{{ '?key=' ~ key if key }}" class="row">
+    <input name="confirm" placeholder="输入“删除”确认" required>
+    <button class="danger-btn">删除</button>
+  </form>
+</section>
+{% endblock %}

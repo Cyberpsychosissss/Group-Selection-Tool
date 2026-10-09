@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div id="live" data-rev="{{ v.pool.rev }}">
+  {% include "_pool_body.html" %}
+</div>
+
+{# 一对一临时对话：和直接交换位置的人，只能发预设短语；只在服务器内存里保留 15 分钟，不存储 #}
+<script type="application/json" id="chat-data">{{ chats|map("list")|list|tojson }}</script>
+<aside id="chat" class="chat" hidden>
+  <button type="button" class="chat-head" id="chat-toggle"><span id="chat-title">对话</span><span id="chat-unread"></span></button>
+  <div class="chat-body">
+    <div class="chat-tabs" id="chat-tabs"></div>
+    <ul id="chat-log"></ul>
+    <div class="chat-say">
+      {% for key, label in quick %}<button type="button" data-say="{{ key }}">{{ label }}</button>{% endfor %}
+    </div>
+    <p class="muted small">一对一，只能发预设短语。不存储，15 分钟后或全部完成后清除。</p>
+  </div>
+</aside>
+{% endblock %}

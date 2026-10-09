@@ -1,0 +1,9 @@
+{# LM Core Grouping 页面的简化示意：取消哪个、勾选哪个、点哪个按钮 #}
+{% macro lm_mock(action, cur, to) %}
+<div class="lm-mock" aria-label="LM Core 操作示意">
+  <div class="lm-title">LM Core · Grouping</div>
+  {% if action in ("move", "leave") %}<div class="lm-row off"><span class="box">☐</span>Group {{ cur }}<em>取消</em></div>{% endif %}
+  {% if action in ("move", "join") %}<div class="lm-row on"><span class="box">☑</span>Group {{ to }}<em>勾选</em></div>{% endif %}
+  <div class="lm-save">Save my choice<em>点击</em></div>
+</div>
+{% endmacro %}

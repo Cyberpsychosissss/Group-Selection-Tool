@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ISA302 换组</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_v }}">
+</head>
+<body>
+{% if dev %}
+<details class="devbar">
+  <summary>开发模式 · 当前：<b>{{ me.nickname if me else "未登录" }}</b>{% if me %}（{{ me.grp or "无组" }}）{% endif %} · 切换身份</summary>
+  <div class="devbar-body">
+    <div class="ids">
+      {% for m in identities %}
+      <a href="/dev/as/{{ m.id }}" class="{{ 'cur' if me and m.id == me.id }}">{{ m.nickname }}<small>{{ m.grp or "无组" }}</small></a>
+      {% else %}
+      <span class="muted">暂无身份</span>
+      {% endfor %}
+    </div>
+    <form method="post" action="/dev/new" class="row">
+      <input name="nickname" placeholder="代号" required maxlength="20">
+      <select name="grp">{% for g in groups %}<option {{ "selected" if g == "N" }}>{{ g }}</option>{% endfor %}</select>
+      <button>新建</button>
+      <a href="/admin">管理</a>
+    </form>
+  </div>
+</details>
+{% endif %}
+<header class="top">
+  <a href="/" class="brand">ISA302 换组</a>
+  <nav class="row small">
+    <a href="/guide">教程</a>
+    <span class="muted">截止 {{ deadline }}</span>
+  </nav>
+</header>
+<main>
+  {% if err %}<div class="alert">{{ err }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="muted">非官方工具。不收学号密码，不操作 LM Core，以 LM Core 为准。</footer>
+<script src="/static/app.js?v={{ asset_v }}"></script>
+</body>
+</html>

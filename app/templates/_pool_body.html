@@ -1,0 +1,146 @@
+{% from "_macros.html" import lm_mock %}
+{% set state = v.pool.state %}
+{% set status_text = {"stay": "不动", "done": "已到位", "move": "轮到", "join": "轮到加入",
+                      "leave": "需先退出", "homeless": "暂无组", "wait": "等待"} %}
+{% set invite_url = request.base_url ~ "j/" ~ v.pool.code %}
+
+<section class="card">
+  <div class="row between">
+    <h1>池 <code class="mono">{{ v.pool.code }}</code></h1>
+    <ol class="steps">
+      {% for key, text in [("open", "互选"), ("confirming", "确认"), ("executing", "执行"), ("done", "完成")] %}
+      <li class="{{ 'on' if key == state }}">{{ text }}</li>
+      {% endfor %}
+    </ol>
+  </div>
+</section>
+
+<div class="todo s-{{ state }}"><span>下一步</span><p>{{ v.todo|safe }}</p></div>
+
+{# ------------------------------ 互选 ------------------------------ #}
+{% if state == "open" %}
+<section class="card">
+  <h2>邀请</h2>
+  <div class="share">
+    <input readonly value="{{ invite_url }}" class="mono">
+    <button type="button" data-copy="ISA302 换组池（本组全员需加入）：{{ invite_url }}">复制</button>
+  </div>
+  <p class="muted small">发到每个参与组的群里。每个组的全部成员加入后才算到齐。</p>
+</section>
+
+<section class="card">
+  <h2>{{ "互选" if v.wishes_open else "成员" }}</h2>
+  {% if not v.wishes_open %}<p class="muted small">池里所有组全员到齐后开放互选（至少 2 个组）。</p>{% endif %}
+  <div class="groups">
+    {% for g in v.groups %}
+    <div class="group">
+      <div class="group-head"><b>{{ g.grp }}</b>
+        <span class="{{ 'ok' if g.members|length >= g.lm_count else 'muted' }}">{{ g.members|length }}/{{ g.lm_count }}</span></div>
+      {% for m in g.members %}
+        {% set picked = m.id in v.my_wishes %}{% set picked_me = m.id in v.wished_by %}
+        <div class="person {{ 'mutual' if picked and picked_me }}">
+          <span>{{ m.nickname }}{% if m.id == me.id %} <small class="muted">我</small>{% endif %}</span>
+          {% if m.id != me.id and v.wishes_open %}
+          <form method="post" action="/pool/wish">
+            <input type="hidden" name="to_id" value="{{ m.id }}">
+            <input type="hidden" name="want" value="{{ 0 if picked else 1 }}">
+            {% if picked and picked_me %}<button class="chip on" title="点击取消">互选</button>
+            {% elif picked %}<button class="chip on" title="点击取消">已选</button>
+            {% elif picked_me %}<button class="chip hint">对方已选你</button>
+            {% else %}<button class="chip">选</button>{% endif %}
+          </form>
+          {% endif %}
+        </div>
+      {% endfor %}
+      {% for _ in range(g.lm_count - g.members|length) %}<div class="person empty">未加入</div>{% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <h2>小队</h2>
+  {% if v.teams %}<ul class="teams">{% for t in v.teams %}<li class="{{ 'bad' if t|length > 5 }}">{{ t|join("、") }}（{{ t|length }}）</li>{% endfor %}</ul>
+  {% else %}<p class="muted">暂无互选。</p>{% endif %}
+  <ul class="checklist">
+    {% for ok, text in v.checks %}<li class="{{ 'ok' if ok }}">{{ text }}</li>{% endfor %}
+  </ul>
+  <div class="row">
+    <form method="post" action="/pool/plan"><button class="primary" {{ "disabled" if v.blockers }}>生成方案</button></form>
+    <form method="post" action="/pool/leave"><button class="ghost">退出池</button></form>
+  </div>
+</section>
+{% endif %}
+
+{# ------------------------------ 确认 ------------------------------ #}
+{% if state == "confirming" %}
+<section class="card highlight">
+  <h2>你的安排</h2>
+  <p class="big">{{ v.swap_text|safe }}</p>
+  <p class="muted">新组员：{{ v.teammates|join("、") or "无" }}</p>
+  {% if v.mine.approved %}
+  <p class="muted">未表态：{{ v.not_approved|join("、") }}</p>
+  {% else %}
+  <div class="row">
+    <form method="post" action="/pool/approve"><button class="primary">同意</button></form>
+    <form method="post" action="/pool/reject"><button class="ghost">不同意</button></form>
+  </div>
+  {% endif %}
+  <p class="muted small">移动 {{ v.movers_total }} 人，其中 {{ v.swaps }} 对互换。同意 {{ v.approved_count }}/{{ v.total }}。</p>
+</section>
+{% endif %}
+
+{# ------------------------------ 执行 ------------------------------ #}
+{% if state == "executing" %}
+<section class="card highlight {{ 'go' if v.my_action }}">
+  {% if v.my_action %}
+  <h2>轮到你</h2>
+  <div class="go-grid">
+    <div>
+      <p class="big">{{ v.instruction|safe }}</p>
+      <p><a href="{{ v.lmcore_url }}" target="_blank" rel="noopener">打开 LM Core Grouping ↗</a></p>
+      <form method="post" action="/pool/act">
+        <input type="hidden" name="action" value="{{ v.my_action }}">
+        <input type="hidden" name="seq" value="{{ v.my_seq }}">
+        <button class="primary">已在 LM Core 保存</button>
+      </form>
+    </div>
+    {{ lm_mock(v.my_action, v.my_step[0], v.my_step[1]) }}
+  </div>
+  {% elif v.mine.status == "done" %}<h2>已到位：{{ v.mine.to }}</h2>
+  {% elif v.mine.status == "stay" %}<h2>留在 {{ v.mine.to }}</h2>
+  {% else %}<h2>等待</h2><p>{{ v.swap_text|safe }}</p>
+  {% endif %}
+  <div class="progress"><div style="width: {{ (100 * v.movers_done / v.movers_total)|round|int if v.movers_total else 100 }}%"></div></div>
+  <p class="muted small">{{ v.movers_done }}/{{ v.movers_total }} 已到位 · 当前人数
+    {% for g, n in v.live_counts.items() %}{{ g }}={{ n }}{% if not loop.last %} {% endif %}{% endfor %}</p>
+</section>
+{% endif %}
+
+{# ------------------------------ 分组表 ------------------------------ #}
+{% if state != "open" and v.new_groups %}
+<section class="card">
+  <h2>{{ "最终分组" if state == "done" else "新分组" }}</h2>
+  <div class="groups">
+    {% for grp, rows in v.new_groups.items() %}
+    <div class="group">
+      <div class="group-head"><b>{{ grp }}</b><span class="muted">{{ rows|length }} 人</span></div>
+      {% for x in rows %}
+      <div class="person {{ 'me' if x.id == me.id }}">
+        <span>{{ x.name }}{% if x.moved %} <small class="muted">{{ x.from }}→{{ x.to }}{% if x.partners %} ⇄{{ x.partners|join("、") }}{% endif %}</small>{% endif %}</span>
+        {% if state == "confirming" %}<small class="{{ 'ok' if x.approved else 'muted' }}">{{ "同意" if x.approved else "—" }}</small>
+        {% else %}<small class="st st-{{ x.status }}">{{ status_text[x.status] }}</small>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>记录</h2>
+  <ul class="timeline">
+    {% for e in v.events %}<li><time>{{ e.at[11:16] }}</time>{{ e.text }}</li>{% endfor %}
+  </ul>
+</section>

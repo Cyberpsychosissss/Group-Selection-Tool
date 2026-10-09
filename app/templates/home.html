@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% macro group_select(selected="N") %}
+<select name="grp">{% for g in groups %}<option {{ "selected" if g == selected }}>{{ g }}</option>{% endfor %}</select>
+{% endmacro %}
+
+{% macro count_field(grp=None) %}
+<label>{{ (grp ~ " 组") if grp else "本组" }}人数 <span class="hint">LM Core 表格 Members 列；本组首个加入者填写</span>
+  <input type="number" name="lm_count" min="1" max="5" value="5"></label>
+{% endmacro %}
+
+{% if not me %}
+<section class="card">
+  <h1>{{ "加入池 " ~ invite if invite else "登记" }}</h1>
+  <form method="post" action="/register" class="stack">
+    {% if invite %}<input type="hidden" name="code" value="{{ invite }}">{% endif %}
+    <label>代号 <span class="hint">同组同学能认出即可；不能与他人重复；一台设备只能登记一个</span>
+      <input name="nickname" required maxlength="20" autocomplete="off"></label>
+    <label>当前组 <span class="hint">LM Core Grouping 页 Your selection</span>
+      {{ group_select() }}</label>
+    {% if invite %}{{ count_field() }}{% endif %}
+    <button class="primary">{{ "登记并加入" if invite else "登记" }}</button>
+  </form>
+</section>
+
+{% else %}
+<section class="card">
+  <form method="post" action="/me/group" class="row">
+    <b>{{ me.nickname }}</b>
+    <span class="muted">当前组</span>
+    {{ group_select(me.grp) }}
+    <button>修改</button>
+  </form>
+</section>
+
+{% if invite %}
+<section class="card">
+  <h2>加入池 <code>{{ invite }}</code></h2>
+  <form method="post" action="/pool/join" class="stack">
+    <input type="hidden" name="code" value="{{ invite }}">
+    {{ count_field(me.grp) }}
+    <button class="primary">加入</button>
+  </form>
+</section>
+{% else %}
+<div class="grid2">
+  <section class="card">
+    <h2>加入池</h2>
+    <form method="post" action="/pool/join" class="stack">
+      <label>邀请码<input name="code" required maxlength="8" class="mono"></label>
+      {{ count_field(me.grp) }}
+      <button class="primary">加入</button>
+    </form>
+  </section>
+  <section class="card">
+    <h2>创建池</h2>
+    <form method="post" action="/pool/create" class="stack">
+      {{ count_field(me.grp) }}
+      <button class="primary">创建</button>
+    </form>
+  </section>
+</div>
+{% endif %}
+
+<details class="card small">
+  <summary>恢复链接（换设备时使用，勿外传）</summary>
+  <code class="wrap">{{ request.base_url }}login/{{ request.cookies.get("gst") }}</code>
+</details>
+{% endif %}
+{% endblock %}

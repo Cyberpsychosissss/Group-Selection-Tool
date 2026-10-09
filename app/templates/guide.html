@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "_macros.html" import lm_mock %}
+{% block content %}
+<section class="card">
+  <h1>教程</h1>
+  <p>规则：每组最多 5 人；换组需先有人退出、空出位置。本工具计算方案并按顺序提示每人操作，不操作 LM Core。</p>
+  <ol class="guide-steps">
+    <li><b>登记</b>：代号 + 当前组号（LM Core Grouping 页 <code>Your selection</code>）。代号不能重复，一台设备只能登记一个。</li>
+    <li><b>建池</b>：一人创建，复制邀请链接发到相关各组的群。每个组全部成员加入后才算到齐。</li>
+    <li><b>互选</b>：至少 2 个组全员到齐后开放。选想同组的人，双方都选才生效；互选的人组成小队（≤5 人）。不选则由系统安排。</li>
+    <li><b>生成方案</b>：系统分配目标组，并拆成两人一组的交换；各组人数不变，移动人数尽量少。</li>
+    <li><b>确认</b>：全员同意后开始执行；任一人不同意则退回互选。</li>
+    <li><b>执行</b>：一组一组进行。轮到你时按提示在 LM Core 操作，保存后点“已在 LM Core 保存”。未轮到时不要操作。右下角是和交换对象的一对一对话，只能发预设短语。</li>
+  </ol>
+</section>
+
+<section class="card">
+  <h2>LM Core 操作</h2>
+  <div class="mock-grid">
+    <div><h3>换组</h3><p class="small muted">同一次保存里取消旧组、勾选新组，中间不会无组。</p>{{ lm_mock("move", "N", "B") }}</div>
+    <div><h3>先退出</h3><p class="small muted">相关组都满员时才会出现，之后暂时无组。</p>{{ lm_mock("leave", "N", "B") }}</div>
+    <div><h3>加入</h3><p class="small muted">先退出的人在位置空出后加入。</p>{{ lm_mock("join", "N", "B") }}</div>
+  </div>
+  <p class="small"><a href="{{ lmcore_url }}" target="_blank" rel="noopener">打开 LM Core Grouping ↗</a></p>
+</section>
+
+<section class="card faq">
+  <h2>常见问题</h2>
+  <details><summary>会被分到池外的组吗？</summary><p>不会。只在池内各组之间调整，池外不受影响。</p></details>
+  <details><summary>会有人暂时无组吗？</summary><p>池内有不满 5 人的组时不会；全满时会有人短暂无组，优先由小队成员承担。</p></details>
+  <details><summary>有人不加入、不同意或不操作？</summary><p>在群里联系。不同意会退回互选；执行中可用“稍后操作”“遇到问题”告知全池。</p></details>
+  <details><summary>LM Core 显示目标组已满？</summary><p>可能被池外的人占用。点“目标组已满”，全池暂停，在群里沟通。</p></details>
+  <details><summary>为什么有人要换两次？</summary><p>几个人的需求连成一个圈（A 要去 B 组、B 要去 C 组、C 要去 A 组），任何两人都不是正好想去对方的组。圈里有组有空位时依次单独移动即可；各组都满时只能分两次对调，中间的人移动两次。很少出现。</p></details>
+  <details><summary>记录哪些数据？</summary><p>代号、组号、互选、方案和操作记录。不收学号密码，截止后删除。一对一对话不保存。</p></details>
+</section>
+{% endblock %}
