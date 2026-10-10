@@ -301,6 +301,20 @@ class Repo:
             " (SELECT COUNT(*) FROM member m WHERE m.team_id = t.id AND m.ghost=0) AS members"
             " FROM team t LEFT JOIN pool p ON p.id = t.pool_id ORDER BY t.created_at").fetchall()
 
+    def round_pools(self):
+        """意向组分配出的轮次（含已完成的，按创建时间）。"""
+        return self.c.execute("SELECT * FROM pool WHERE mode='round' ORDER BY created_at").fetchall()
+
+    def recent_team_events(self, limit: int = 30):
+        return self.c.execute(
+            "SELECT e.at, e.text, t.code FROM team_event e JOIN team t ON t.id = e.team_id"
+            " ORDER BY e.id DESC LIMIT ?", (limit,)).fetchall()
+
+    def recent_round_events(self, limit: int = 30):
+        return self.c.execute(
+            "SELECT e.at, e.text, p.code FROM event e JOIN pool p ON p.id = e.pool_id"
+            " WHERE p.mode='round' ORDER BY e.id DESC LIMIT ?", (limit,)).fetchall()
+
     def active_round_groups(self) -> set[str]:
         """正在确认 / 执行的轮次涉及的组：这些组的人数在变，别的意向组先不往里算。"""
         rows = self.c.execute(

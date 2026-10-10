@@ -320,3 +320,20 @@ document.addEventListener("submit", function (e) {
   }
   schedule(300);
 })();
+
+// 4) 管理页：换组进度每 5 秒拉一次 /admin/live 替换（只换进度区块，删除按钮照常可点）
+(function () {
+  var box = document.getElementById("progress");
+  if (!box || !box.dataset.live) return;
+  var tick = document.getElementById("progress-tick");
+  setInterval(function () {
+    if (document.hidden) return;
+    fetch(box.dataset.live, { credentials: "same-origin" }).then(function (r) {
+      if (r.status !== 200) throw new Error(String(r.status));
+      return r.text();
+    }).then(function (html) {
+      box.innerHTML = html;
+      if (tick) tick.textContent = "已刷新 " + new Date().toLocaleTimeString();
+    }).catch(function () { if (tick) tick.textContent = "刷新失败，稍后重试"; });
+  }, 5000);
+})();

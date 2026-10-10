@@ -179,3 +179,18 @@ h3 { font-size: 15px; margin: 0 0 6px; }
 .table tr.me td .muted, .table tr.me td form { font-weight: normal; }
 .members .group-tools { margin: 0; padding: 0; border: 0; }
 .team-actions { gap: 10px; }
+
+/* ---------- 管理页：换组进度 ---------- */
+.stage-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 6px 0 12px; }
+.stage-card { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; gap: 2px; }
+.stage-card b { font-size: 22px; line-height: 1.1; } .stage-card span { font-size: 13px; } .stage-card small { color: var(--muted); font-size: 12px; }
+.stage-card.s-executing { border-color: var(--warn); } .stage-card.s-executing b { color: var(--warn); }
+.stage-card.s-done { border-color: var(--ok); } .stage-card.s-done b { color: var(--ok); }
+.stage-card.s-confirming { border-color: var(--accent); } .stage-card.s-confirming b { color: var(--accent); }
+.badge.s-paused { background: var(--bad-soft); color: var(--bad); } .badge.s-confirming { background: var(--accent-soft); color: var(--accent); }
+.badge.s-build, .badge.s-wait { background: var(--line); color: var(--muted); }
+.bar { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; width: 80px; margin-bottom: 3px; }
+.bar div { height: 100%; background: var(--ok); }
+#progress .table { font-size: 13px; } #progress h2 { margin-top: 18px; }
+#progress .timeline { max-height: 260px; }
+#progress th { white-space: nowrap; }

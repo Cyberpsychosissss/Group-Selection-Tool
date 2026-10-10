@@ -37,6 +37,8 @@ _B64 = re.compile(r"^[A-Za-z0-9+/=_-]+$")
 PUBKEY_LEN = (60, 200)  # P-256 raw 公钥 base64 是 88 字符；留余量
 CIPHER_MAX = 2048  # 密文（base64）上限：一个微信号绰绰有余
 ROUND_REV_BASE = 1_000_000  # 轮次的 rev 加这个偏移，和意向组自己的 rev 不会撞上（页面靠 rev 变化刷新）
+STAGE_LABEL = {"build": "组建中", "wait": "等待分配", "paused": "已暂停", "confirming": "确认中",
+               "executing": "执行中", "done": "已完成"}  # 管理页里意向组的阶段
 
 
 class UserError(Exception):
@@ -1112,6 +1114,95 @@ class Service:
             pools = r.all_pools()
             return {"members": len(r.all_members()), "pools": Counter(p["state"] for p in pools),
                     "pool_list": pools, "team_list": r.all_teams(), "counts": r.all_group_counts()}
+
+    def progress(self) -> dict:
+        """管理页：全站换组进度。每个意向组在哪个阶段、同意 / 到位几个人、为什么还在等；每一轮的进度；
+        各组人数和数据来源；最近动态。"""
+        with self.store.read() as r:
+            counts = {row["grp"]: row for row in r.all_group_counts()}
+            busy = r.active_round_groups()
+            pools = {p["id"]: p for p in r.round_pools()}
+            round_info = {pid: self._round_progress(r, p) for pid, p in pools.items()}
+            stage_tot = {k: {"teams": 0, "people": 0} for k in STAGE_LABEL}
+            teams, in_teams, team_of = [], 0, {}
+            for t in r.all_teams():
+                ms = r.team_members(t["id"])
+                in_teams += len(ms)
+                for m in ms:
+                    team_of[m["id"]] = t["code"]
+                pool = pools.get(t["pool_id"]) if t["pool_id"] else None
+                stage = pool["state"] if pool else ("paused" if t["paused"] else "wait") if t["locked"] else "build"
+                stage_tot[stage]["teams"] += 1
+                stage_tot[stage]["people"] += len(ms)
+                info = round_info.get(t["pool_id"]) if pool else None
+                plan = info["plan"] if info else {}
+                mids = [m["id"] for m in ms]
+                targets = Counter(plan[mid]["to_grp"] for mid in mids if mid in plan)
+                movers = [mid for mid in mids if mid in plan and plan[mid]["from_grp"] != plan[mid]["to_grp"]]
+                note = ""
+                if stage in ("build", "wait", "paused") and ms:
+                    leader = next((m for m in ms if m["id"] == t["leader_id"]), ms[0])
+                    note = str(self._team_view(r, leader, t)["todo"])
+                leader_row = r.member(t["leader_id"]) if t["leader_id"] else None
+                events = r.team_events(t["id"], 1)
+                teams.append({
+                    "id": t["id"], "code": t["code"], "leader": leader_row["nickname"] if leader_row else "—",
+                    "members": [f"{m['nickname']}@{m['grp'] or '无组'}" for m in ms], "size": len(ms),
+                    "stage": stage, "stage_label": STAGE_LABEL[stage], "round": pool["code"] if pool else None,
+                    "target": targets.most_common(1)[0][0] if targets else None,
+                    "approved": sum(1 for mid in mids if mid in plan and plan[mid]["approved"]) if stage == "confirming" else None,
+                    "moved": sum(1 for mid in movers if mid in info["done_ids"]) if info else None,
+                    "movers": len(movers) if info else None,
+                    "note": note, "updated_at": events[0]["at"] if events else t["created_at"],
+                })
+            rounds = []
+            for pid, p in pools.items():
+                info = round_info[pid]
+                rounds.append({
+                    "id": pid, "code": p["code"], "state": p["state"], "state_label": STAGE_LABEL.get(p["state"], p["state"]),
+                    "teams": [t["code"] for t in r.teams_in_pool(pid)], "groups": info["groups"],
+                    "approved": info["approved"], "humans": info["humans"],
+                    "moved": info["moved"], "movers": info["movers"], "created_at": p["created_at"],
+                })
+            members = r.all_members()
+            in_grp: dict[str, list[str]] = {}
+            for m in members:
+                if m["team_id"] and m["grp"]:
+                    in_grp.setdefault(m["grp"], []).append(f"{m['nickname']}（{team_of.get(m['id'], '?')}）")
+            groups = [{
+                "grp": g, "count": counts[g]["count"] if g in counts else None,
+                "source": counts[g]["source"] if g in counts else None, "at": counts[g]["at"] if g in counts else None,
+                "busy": g in busy, "members": in_grp.get(g, []),
+            } for g in sorted(set(counts) | set(in_grp), key=lambda x: (len(x), x))]
+            events = sorted(
+                [{"at": e["at"], "text": e["text"], "code": e["code"], "kind": "team"} for e in r.recent_team_events()]
+                + [{"at": e["at"], "text": e["text"], "code": e["code"], "kind": "round"} for e in r.recent_round_events()],
+                key=lambda e: e["at"], reverse=True)[:30]
+        done = [x for x in rounds if x["state"] == "done"]
+        executing = [x for x in rounds if x["state"] == "executing"]
+        return {
+            "members": len(members), "in_teams": in_teams, "stages": stage_tot,
+            "summary": {
+                "done_rounds": len(done), "done_teams": sum(len(x["teams"]) for x in done),
+                "done_people": sum(stage_tot["done"]["people"] for _ in [0]), "done_moved": sum(x["movers"] for x in done),
+                "executing_rounds": len(executing), "executing_moved": sum(x["moved"] for x in executing),
+                "executing_movers": sum(x["movers"] for x in executing),
+            },
+            "teams": teams, "rounds": rounds, "groups": groups, "events": events,
+        }
+
+    def _round_progress(self, r: Repo, pool) -> dict:
+        """一轮的进度：方案、真人同意数、需要移动的人数、已到位的人。"""
+        st = self._exec_state(r, pool["id"])
+        order = execution.member_swaps(st.swaps)
+        members = r.plan_members(pool["id"]) if st.plan else r.pool_members(pool["id"])
+        humans = [m for m in members if not m["ghost"]]
+        movers = [m["id"] for m in humans if m["id"] in st.plan and st.plan[m["id"]]["from_grp"] != st.plan[m["id"]]["to_grp"]]
+        done_ids = {mid for mid in movers if st.done.get(mid, 0) >= len(order.get(mid, []))}
+        groups = sorted({p["to_grp"] for p in st.plan.values()} | {p["from_grp"] for p in st.plan.values()}) if st.plan \
+            else [g["grp"] for g in r.pool_groups(pool["id"])]
+        return {"plan": st.plan, "humans": len(humans), "approved": sum(1 for m in humans if m["id"] in st.plan and st.plan[m["id"]]["approved"]),
+                "movers": len(movers), "moved": len(done_ids), "done_ids": done_ids, "groups": groups}
 
     def delete_pool(self, pool_id: str) -> None:
         """管理员删除一个池 / 轮：成员回到未加入状态，方案、互选、记录全部删除。轮里的意向组回到等待。"""

@@ -564,7 +564,16 @@ def _admin_path(request: Request) -> str:
 def admin(request: Request):
     if not _admin_ok(request):
         return Response(status_code=404)
-    return _render(request, "admin.html", stats=svc.stats(), key=request.query_params.get("key", ""))
+    return _render(request, "admin.html", stats=svc.stats(), progress=svc.progress(), key=request.query_params.get("key", ""))
+
+
+@app.get("/admin/live", response_class=HTMLResponse)
+def admin_live(request: Request):
+    """管理页的进度区块，页面每 5 秒拉一次替换。"""
+    if not _admin_ok(request):
+        return Response(status_code=404)
+    return templates.TemplateResponse(request, "_admin_progress.html",
+                                      {"progress": svc.progress(), "key": request.query_params.get("key", "")})
 
 
 @app.post("/admin/pool/delete")

@@ -397,3 +397,58 @@ def test_team_pages_render_in_every_state():
     assert c.get("/", follow_redirects=False).status_code == 200
     assert c.post("/admin/team/delete", data={"team_id": web_svc.stats()["team_list"][0]["id"]}, follow_redirects=False).status_code == 303
     assert web_svc.stats()["team_list"] == []
+
+
+# ---------- 管理页：换组进度 ----------
+
+def test_progress_covers_every_stage(svc):
+    done = _team(svc, {"e1": ("A", 5), "e2": ("A", 5)})            # 本来就同组：立刻完成
+    x = _team(svc, {"x1": ("B", 5), "x2": ("C", 5)})               # 和 y 互换，执行中
+    y = _team(svc, {"y1": ("C", 5), "y2": ("B", 5)})
+    for mid in {**x, **y}.values():
+        svc.approve(mid)
+    first = next(m for m in {**x, **y}.values() if svc.pool_view(m)["my_action"])
+    svc.act(first, svc.pool_view(first)["my_action"], 0)
+    waiting = _team(svc, {"w1": ("D", 5), "w2": ("E", 5)})          # 等待分配
+    build = _team(svc, {"b1": ("F", 5), "b2": ("G", 5)}, lock=False)  # 组建中
+    svc.update_counts({"H": 4})
+    pg = svc.progress()
+    assert pg["members"] == 10 and pg["in_teams"] == 10
+    assert {k: v["teams"] for k, v in pg["stages"].items()} == {"build": 1, "wait": 1, "paused": 0, "confirming": 0, "executing": 2, "done": 1}
+    assert pg["summary"]["done_rounds"] == 1 and pg["summary"]["executing_rounds"] == 1
+    by_code = {t["code"]: t for t in pg["teams"]}
+    w = by_code[svc.pool_view(waiting["w1"])["code"]]
+    assert w["stage"] == "wait" and "还坐不下" in w["note"] and w["target"] is None
+    b = by_code[svc.pool_view(build["b1"])["code"]]
+    assert b["stage"] == "build" and "邀请链接" in b["note"] and b["leader"] == "b1"
+    ex = by_code[svc.pool_view(x["x1"])["code"]]
+    assert ex["stage"] == "executing" and ex["movers"] == 1 and ex["target"] in ("B", "C") and ex["round"]
+    d = by_code[svc.pool_view(done["e1"])["code"]]
+    assert d["stage"] == "done" and d["movers"] == 0 and d["target"] == "A"
+    rounds = {r["state"]: r for r in pg["rounds"]}
+    assert rounds["executing"]["movers"] == 2 and rounds["executing"]["moved"] in (0, 1) and rounds["executing"]["approved"] == 4
+    assert set(rounds["executing"]["groups"]) == {"B", "C"} and len(rounds["executing"]["teams"]) == 2
+    groups = {g["grp"]: g for g in pg["groups"]}
+    assert groups["H"]["source"] == "crawler" and groups["H"]["members"] == []
+    assert groups["B"]["busy"] and len(groups["D"]["members"]) == 1 and "w1" in groups["D"]["members"][0]
+    assert pg["events"] and pg["events"][0]["at"] >= pg["events"][-1]["at"]
+
+
+def test_admin_progress_page_and_live_fragment(monkeypatch):
+    from app import web
+    from app.web import app, svc as web_svc
+
+    web_svc.purge()
+    ids = _team(web_svc, {"p1": ("A", 5), "p2": ("B", 5)})
+    c = TestClient(app)
+    html = c.get("/admin").text
+    assert "换组进度" in html and "等待分配" in html and "还坐不下" in html and 'data-live="/admin/live"' in html
+    live = c.get("/admin/live")
+    assert live.status_code == 200 and "stage-cards" in live.text and "<html" not in live.text
+    web_svc.update_counts({"Z": 0})
+    assert "确认中" in c.get("/admin/live").text
+    monkeypatch.setattr(config, "DEV_MODE", False)
+    monkeypatch.setattr(config, "WHOAMI_URL", "")
+    monkeypatch.setattr(config, "ADMIN_KEY", "")
+    assert c.get("/admin/live").status_code == 404
+    assert ids

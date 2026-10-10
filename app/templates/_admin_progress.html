@@ -1,0 +1,71 @@
+{# 管理页：全站换组进度（/admin/live 每 5 秒刷新这一块） #}
+{% set q = ('?key=' ~ key) if key else '' %}
+{% set pg = progress %}
+<div class="stage-cards">
+  {% for key_, label in [("build", "组建中"), ("wait", "等待分配"), ("paused", "已暂停"), ("confirming", "确认中"), ("executing", "执行中"), ("done", "已完成")] %}
+  <div class="stage-card s-{{ key_ }}"><b>{{ pg.stages[key_].teams }}</b><span>{{ label }}</span><small>{{ pg.stages[key_].people }} 人</small></div>
+  {% endfor %}
+</div>
+<p class="small">登记 {{ pg.members }} 人，其中 {{ pg.in_teams }} 人在意向组里。
+  已完成 {{ pg.summary.done_rounds }} 轮：{{ pg.summary.done_teams }} 个意向组、{{ pg.stages.done.people }} 人如愿，实际移动 {{ pg.summary.done_moved }} 人；
+  {% if pg.summary.executing_rounds %}进行中 {{ pg.summary.executing_rounds }} 轮，已到位 {{ pg.summary.executing_moved }}/{{ pg.summary.executing_movers }} 人。{% else %}没有正在执行的轮次。{% endif %}</p>
+
+<h2>意向组</h2>
+{% if pg.teams %}
+<table class="table">
+  <tr><th>邀请码</th><th>组长</th><th>成员</th><th>阶段</th><th>目标组</th><th>进度</th><th>说明</th><th>最近</th><th></th></tr>
+  {% for t in pg.teams %}
+  <tr>
+    <td class="mono">{{ t.code }}</td><td>{{ t.leader }}</td>
+    <td class="small">{{ t.members|join("、") }}</td>
+    <td><span class="badge s-{{ t.stage }}">{{ t.stage_label }}</span>{% if t.round %}<br><small class="muted mono">轮 {{ t.round }}</small>{% endif %}</td>
+    <td>{{ t.target or "—" }}</td>
+    <td class="small">{% if t.stage == "confirming" %}同意 {{ t.approved }}/{{ t.size }}{% elif t.stage in ("executing", "done") %}到位 {{ t.moved }}/{{ t.movers }}{% else %}—{% endif %}</td>
+    <td class="small muted">{{ t.note }}</td>
+    <td class="small muted">{{ t.updated_at[5:16]|replace("T", " ") }}</td>
+    <td><form method="post" action="/admin/team/delete{{ q }}" data-confirm="删除意向组 {{ t.code }}？成员回到未加入状态；正在进行的那一轮一并删除。">
+      <input type="hidden" name="team_id" value="{{ t.id }}"><button class="chip">删除</button></form></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted small">还没有意向组。</p>{% endif %}
+
+<h2>轮次</h2>
+{% if pg.rounds %}
+<table class="table">
+  <tr><th>编号</th><th>阶段</th><th>意向组</th><th>涉及的组</th><th>同意</th><th>到位</th><th>创建</th><th></th></tr>
+  {% for x in pg.rounds %}
+  <tr>
+    <td class="mono">{{ x.code }}</td><td><span class="badge s-{{ x.state }}">{{ x.state_label }}</span></td>
+    <td class="mono small">{{ x.teams|join(" ") }}</td><td>{{ x.groups|join("、") }}</td>
+    <td>{{ x.approved }}/{{ x.humans }}</td>
+    <td>{% if x.movers %}<div class="bar"><div style="width: {{ (100 * x.moved / x.movers)|round|int }}%"></div></div>{% endif %}{{ x.moved }}/{{ x.movers }}</td>
+    <td class="small muted">{{ x.created_at[5:16]|replace("T", " ") }}</td>
+    <td><form method="post" action="/admin/pool/delete{{ q }}" data-confirm="删除这一轮 {{ x.code }}？方案和记录删除，意向组回到等待。">
+      <input type="hidden" name="pool_id" value="{{ x.id }}"><button class="chip">删除</button></form></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted small">还没有分配出任何一轮。</p>{% endif %}
+
+<h2>各组人数</h2>
+{% if pg.groups %}
+<table class="table">
+  <tr><th>组</th><th>人数</th><th>来源</th><th>更新</th><th>意向成员（所属意向组）</th></tr>
+  {% for g in pg.groups %}
+  <tr>
+    <td><b>{{ g.grp }}</b>{% if g.busy %} <small class="muted">分配中</small>{% endif %}</td>
+    <td>{{ g.count if g.count is not none else "未知" }}</td>
+    <td class="small">{{ "爬虫" if g.source == "crawler" else "轮次结果" if g.source == "round" else ("填报 " ~ g.source[7:]) if g.source else "—" }}</td>
+    <td class="small muted">{{ g.at[5:16]|replace("T", " ") if g.at else "—" }}</td>
+    <td class="small">{{ g.members|join("、") }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted small">还没有任何组的人数数据。</p>{% endif %}
+
+<h2>最近动态</h2>
+<ul class="timeline">
+  {% for e in pg.events %}<li><time>{{ e.at[5:16]|replace("T", " ") }}</time><span class="mono small muted">{{ "轮" if e.kind == "round" else "组" }} {{ e.code }}</span> {{ e.text }}</li>
+  {% else %}<li class="muted">暂无</li>{% endfor %}
+</ul>
