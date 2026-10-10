@@ -1,5 +1,6 @@
 """2026-10-10 审查后补的回归测试：XSS、池的退路、求解器最优、反代链接、口令限速、跨站 POST、占位、本组人数。"""
 import itertools
+import json
 import os
 import random
 import sqlite3
@@ -324,7 +325,7 @@ def test_full_note_names_current_step_and_old_partner_is_filtered(svc):
     first, second = (st.swaps[i] for i in order[ids[twice]])
     hub = first.route(ids[twice])[1]
     assert hub != second.route(ids[twice])[1]
-    pair, _ = svc.chat_peers(ids[twice])[0]
+    pair, _, _ = svc.chat_peers(ids[twice])[0]
     svc.send_quick(ids[twice], "full", pair)
     old_partner = first.partner(ids[twice])
     assert svc.chat_since(old_partner, 0)[-1]["text"] == f"LM Core 上 {hub} 组显示已满，无法保存。"
@@ -494,3 +495,46 @@ def test_whoami_remote_treats_401_and_errors_as_no_identity(monkeypatch):
 
     monkeypatch.setattr(config, "WHOAMI_URL", "http://127.0.0.1:9/api/whoami")  # 没人监听
     assert web._whoami_remote("x") is None
+
+
+# ---------- 端到端加密的「加我微信细说」：服务器只转发密文 ----------
+
+def test_e2e_cipher_relay_and_pubkey_exchange(svc):
+    ids = build_pool(svc, VACANCY)
+    start_execution(svc, ids)
+    mover = next(m for m in ids.values() if svc.pool_view(m)["mine"]["partner"])
+    pair, peer_name, peer_key = svc.chat_peers(mover)[0]
+    peer = ids[peer_name]
+    assert peer_key is None                                   # 对方还没登记公钥
+    rev = svc.pool_view(mover)["pool"]["rev"]
+    svc.set_pubkey(peer, "A" * 88)
+    assert svc.chat_peers(mover)[0][2] == "A" * 88
+    assert svc.pool_view(mover)["pool"]["rev"] == rev + 1     # 公钥变了才 bump
+    svc.set_pubkey(peer, "A" * 88)
+    assert svc.pool_view(mover)["pool"]["rev"] == rev + 1
+    with pytest.raises(UserError):
+        svc.set_pubkey(peer, "not base64!")
+    svc.send_cipher(mover, pair, "aXZpdml2aXZpdml2", "Y2lwaGVydGV4dA==")
+    got = svc.chat_since(peer, 0)
+    assert got[-1]["cipher"] == {"iv": "aXZpdml2aXZpdml2", "ct": "Y2lwaGVydGV4dA=="} and "text" not in got[-1]
+    with pytest.raises(UserError, match="格式"):
+        svc.send_cipher(mover, pair, "iv", "x" * 3000)
+    with pytest.raises(UserError, match="结束"):
+        svc.send_cipher(ids[next(n for n, m in ids.items() if not svc.pool_view(m)["mine"]["moved"])], pair, "aXZpdml2", "Y3Q=")
+
+
+def test_http_pubkey_and_wechat_message():
+    from app.web import app, svc as web_svc
+
+    web_svc.purge()
+    ids = build_pool(web_svc, VACANCY)
+    web_svc.make_plan(ids["N1"])
+    mover = next(n for n, m in ids.items() if web_svc.pool_view(m)["mine"]["partner"])
+    client = TestClient(app)
+    client.cookies.set("gst", web_svc.login_as(ids[mover]))
+    assert client.post("/pool/pubkey", data={"pub": "B" * 88}).status_code == 204
+    assert client.post("/pool/pubkey", data={"pub": "short"}).status_code == 400
+    chats = json.loads(client.get("/pool/live?rev=-1").headers["x-chats"])
+    assert client.post("/pool/msg", data={"kind": "wechat", "pair": chats[0]["pair"], "iv": "aXZpdml2", "ct": "Y3Q="}).status_code == 204
+    msgs = json.loads(client.get("/pool/live?rev=-1&m=0").headers["x-msg"])
+    assert msgs[-1]["mine"] and msgs[-1]["cipher"]["ct"] == "Y3Q="

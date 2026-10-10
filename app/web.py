@@ -269,7 +269,7 @@ def pool_live(request: Request, rev: int = -1, m: int = 0):
                                           {"me": me, "v": view, "base_url": _base_url(request)})
         resp.headers["X-Rev"] = str(current)
         chats = svc.chat_peers(me["id"])  # 方案生成 / 退回 / 完成时对话会变
-        resp.headers["X-Chats"] = json.dumps([{"pair": p, "peer": name} for p, name in chats])
+        resp.headers["X-Chats"] = json.dumps([{"pair": p, "peer": name, "key": key} for p, name, key in chats])
     if msgs := svc.chat_since(me["id"], m):
         resp.headers["X-Msg"] = json.dumps(msgs)
     return resp
@@ -391,13 +391,30 @@ def pool_act(request: Request, action: str = Form(...), seq: int | None = Form(N
 
 
 @app.post("/pool/msg")
-def pool_msg(request: Request, kind: str = Form(...), pair: str = Form(...)):
-    """一对一对话里发预设短语（只能选预设的 kind，不接受自定义文本）。页面里用 fetch 发送，返回 204。"""
+def pool_msg(request: Request, kind: str = Form(...), pair: str = Form(...), iv: str = Form(""), ct: str = Form("")):
+    """一对一对话：预设短语（只能选预设的 kind），或 kind=wechat 的端到端密文（iv + ct，服务器只转发）。
+    页面里用 fetch 发送，返回 204。"""
     me = _me(request)
     if not me:
         return Response(status_code=401)
     try:
-        svc.send_quick(me["id"], kind, pair)
+        if kind == "wechat":
+            svc.send_cipher(me["id"], pair, iv, ct)
+        else:
+            svc.send_quick(me["id"], kind, pair)
+    except UserError as e:
+        return Response(str(e), status_code=400, media_type="text/plain; charset=utf-8")
+    return Response(status_code=204)
+
+
+@app.post("/pool/pubkey")
+def pool_pubkey(request: Request, pub: str = Form(...)):
+    """浏览器登记自己的端到端公钥（每次打开池页面都会调一次）。"""
+    me = _me(request)
+    if not me:
+        return Response(status_code=401)
+    try:
+        svc.set_pubkey(me["id"], pub)
     except UserError as e:
         return Response(str(e), status_code=400, media_type="text/plain; charset=utf-8")
     return Response(status_code=204)

@@ -13,6 +13,7 @@
 {% if not me %}
 <section class="card">
   <h1>{{ "加入池 " ~ invite if invite else "登记" }}</h1>
+  <p class="muted small">第一次用？先看 <a href="/guide">使用流程</a>，两分钟。</p>
   <form method="post" action="/register" class="stack">
     {% if invite %}<input type="hidden" name="code" value="{{ invite }}">{% endif %}
     <label>代号 <span class="hint">同组同学能认出即可；不能与他人重复；一台设备只能登记一个</span>

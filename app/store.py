@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS member (
     pool_id    TEXT REFERENCES pool(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL,
     device_hash TEXT,                             -- 登记时的设备（一台设备只能登记一个代号）
-    ghost      INTEGER NOT NULL DEFAULT 0         -- 占位：LM Core 上在组里但没加入本工具的人，占着位置不动
+    ghost      INTEGER NOT NULL DEFAULT 0,        -- 占位：LM Core 上在组里但没加入本工具的人，占着位置不动
+    e2e_pub    TEXT                              -- 浏览器生成的 ECDH 公钥（一对一对话端到端加密用；私钥只在浏览器里）
 );
 CREATE TABLE IF NOT EXISTS pool_group (
     pool_id  TEXT NOT NULL REFERENCES pool(id) ON DELETE CASCADE,
@@ -85,6 +86,8 @@ class Store:
             c.execute("ALTER TABLE member ADD COLUMN device_hash TEXT")
         if "ghost" not in cols:
             c.execute("ALTER TABLE member ADD COLUMN ghost INTEGER NOT NULL DEFAULT 0")
+        if "e2e_pub" not in cols:
+            c.execute("ALTER TABLE member ADD COLUMN e2e_pub TEXT")
         if "moves_done" not in {row["name"] for row in c.execute("PRAGMA table_info(plan)")}:
             c.execute("ALTER TABLE plan ADD COLUMN moves_done INTEGER NOT NULL DEFAULT 0")
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS member_nickname ON member(nickname COLLATE NOCASE)")
@@ -172,6 +175,9 @@ class Repo:
 
     def set_member_token(self, member_id: str, token_hash: str) -> None:
         self.c.execute("UPDATE member SET token_hash=? WHERE id=?", (token_hash, member_id))
+
+    def set_e2e_pub(self, member_id: str, pub: str) -> None:
+        self.c.execute("UPDATE member SET e2e_pub=? WHERE id=?", (pub, member_id))
 
     def pool_members(self, pool_id: str):
         """此刻在池里的人（含占位）。"""

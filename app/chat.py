@@ -2,7 +2,8 @@
 
 - 只放在当前进程的内存里，不写数据库、不写磁盘，服务重启即清空；
 - 每条消息最多保留 TTL 秒，每个对话最多保留最近 N 条；池完成后整池的对话一起删除；
-- 文本由 services 从预设短语里生成，这里不接受任何用户输入的内容。
+- 文本由 services 从预设短语里生成，这里不接受任何用户输入的明文；
+- 「加我微信细说」是浏览器之间端到端加密的密文（cipher），服务器只负责转发，看不到内容。
 
 因为在进程内存里，部署时只能开 1 个 worker（多个 worker 之间看不到彼此的消息）。
 """
@@ -41,10 +42,15 @@ class Chat:
     def is_member(self, pid: str, member_id: str) -> bool:
         return member_id in self._pairs.get(pid, ())
 
-    def post(self, pid: str, sender_id: str, sender: str, text: str) -> None:
+    def post(self, pid: str, sender_id: str, sender: str, text: str | None = None,
+             cipher: dict[str, str] | None = None) -> None:
         if not self.is_member(pid, sender_id):
             return
-        msg = {"pair": pid, "from": sender, "text": text, "at": datetime.now().strftime("%H:%M")}
+        msg = {"pair": pid, "from": sender, "at": datetime.now().strftime("%H:%M")}
+        if cipher:
+            msg["cipher"] = cipher
+        else:
+            msg["text"] = text
         with self._lock:
             self._msgs[pid].append((self._clock(), next(self._seq), sender_id, msg))
 

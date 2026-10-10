@@ -54,6 +54,15 @@ systemctl --user daemon-reload && systemctl --user enable --now group-selection-
 journalctl --user -u group-selection-tool -n 50
 ```
 
+## 新手引导与一对一对话
+
+- **引导气泡**：每个阶段（口令 / 登记 / 首页 / 互选 / 确认 / 执行 / 完成）第一次进入时，在真实界面上逐个高亮元素讲解；右上角「引导」随时重看。
+  纯前端实现（`app/static/app.js` 的 STEPS 表），看过的阶段记在 localStorage；遮罩不拦截点击，页面轮询重绘后自动重新定位。
+- **一对一对话**：执行阶段和交换对象的私聊。预设短语是明文（服务器按 kind 生成）；「加我微信细说」是**端到端加密**：
+  浏览器各自生成 ECDH(P-256) 密钥对（私钥只存本机 localStorage，公钥经 `POST /pool/pubkey` 登记在 `member.e2e_pub`），
+  双方派生 AES-GCM 密钥，服务器只转发 `iv + ct`、从不接触明文；消息只在内存里，15 分钟或池完成后清除。需要 HTTPS（或 localhost）。
+  文字版流程另见 `docs/USAGE.md`。
+
 ## 流程里的几个"后门"
 
 - **本组人数填错**：互选阶段本组任何人可以在池页面更正（不能少于已加入的人数）。

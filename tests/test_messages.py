@@ -67,7 +67,7 @@ def test_quick_phrases_only_preset_and_only_own_pairs(executing):
     mover = next(m for m in ids.values() if svc.pool_view(m)["mine"]["partner"])
     stayer = next(m for m in ids.values() if not svc.pool_view(m)["mine"]["moved"])
     assert svc.chat_peers(stayer) == []
-    pair, peer = svc.chat_peers(mover)[0]
+    pair, peer, _ = svc.chat_peers(mover)[0]
     with pytest.raises(UserError):
         svc.send_quick(mover, "随便写的内容", pair)          # 只能用预设短语
     with pytest.raises(UserError):
@@ -90,7 +90,7 @@ def test_polling_returns_chats_and_new_messages():
     client.cookies.set("gst", web_svc.login_as(ids[mover]))
     r = client.get("/pool/live?rev=-1")
     chats = json.loads(r.headers["x-chats"])
-    assert chats and all(set(c) == {"pair", "peer"} for c in chats)
+    assert chats and all(set(c) == {"pair", "peer", "key"} for c in chats)
     assert client.post("/pool/msg", data={"kind": "ok", "pair": chats[0]["pair"]}).status_code == 204
     assert client.post("/pool/msg", data={"kind": "hello", "pair": chats[0]["pair"]}).status_code == 400
     msgs = json.loads(client.get("/pool/live?rev=-1&m=0").headers["x-msg"])

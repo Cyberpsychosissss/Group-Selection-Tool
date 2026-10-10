@@ -11,6 +11,7 @@ Web 层只调用这里；这里不关心 HTTP，也不写 SQL。
 - 代号是用户输入；凡是拼进会用 |safe 渲染的 HTML 片段里（swap_text / todo），必须先 escape()。
 """
 import hashlib
+import re
 import secrets
 import sqlite3
 from collections import Counter
@@ -25,6 +26,9 @@ from .store import Repo, Store
 
 _CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # 去掉易混淆的 I L O 0 1
 GHOST_NAME = "占位（未加入）"
+_B64 = re.compile(r"^[A-Za-z0-9+/=_-]+$")
+PUBKEY_LEN = (60, 200)  # P-256 raw 公钥 base64 是 88 字符；留余量
+CIPHER_MAX = 2048  # 密文（base64）上限：一个微信号绰绰有余
 
 
 class UserError(Exception):
@@ -446,8 +450,7 @@ class Service:
         """在一对一对话里发一条预设短语。"""
         if kind not in QUICK_NOTES:
             raise UserError("未知的消息")
-        chats = dict(self.chat_peers(member_id))
-        if pair not in chats:
+        if pair not in {p for p, _, _ in self.chat_peers(member_id)}:
             raise UserError("这个对话已经结束")
         with self.store.read() as r:
             me = r.member(member_id)
@@ -456,9 +459,32 @@ class Service:
         dst = st.swaps[i].route(member_id)[1] if i is not None else st.plan[member_id]["to_grp"]
         self.chat.post(pair, member_id, me["nickname"], QUICK_NOTES[kind][1].format(dst=dst))
 
-    def chat_peers(self, member_id: str) -> list[tuple[str, str]]:
+    def send_cipher(self, member_id: str, pair: str, iv: str, ct: str) -> None:
+        """转发一条端到端加密的消息（「加我微信细说」）。服务器只校验格式和大小，看不到内容。"""
+        if not (_B64.match(iv or "") and _B64.match(ct or "") and len(iv) <= 24 and len(ct) <= CIPHER_MAX):
+            raise UserError("消息格式不对")
+        if pair not in {p for p, _, _ in self.chat_peers(member_id)}:
+            raise UserError("这个对话已经结束")
+        with self.store.read() as r:
+            me = r.member(member_id)
+        self.chat.post(pair, member_id, me["nickname"], cipher={"iv": iv, "ct": ct})
+
+    def set_pubkey(self, member_id: str, pub: str) -> None:
+        """登记浏览器生成的 ECDH 公钥。变了才 bump（让对方的页面拿到新公钥）；每次打开页面都会调，没变就什么都不做。"""
+        pub = (pub or "").strip()
+        if not (_B64.match(pub) and PUBKEY_LEN[0] <= len(pub) <= PUBKEY_LEN[1]):
+            raise UserError("公钥格式不对")
+        with self.store.tx() as r:
+            me = r.member(member_id)
+            if not me or me["e2e_pub"] == pub:
+                return
+            r.set_e2e_pub(member_id, pub)
+            if me["pool_id"]:
+                r.bump(me["pool_id"])
+
+    def chat_peers(self, member_id: str) -> list[tuple[str, str, str | None]]:
         """我的一对一对话：只有一个，对象是我当前这次交换的另一个人（交换都做完后保留最后一次的对象）。
-        返回 [(对话 id, 对方代号)]；不需要移动、或者单独进空位的人没有对话。"""
+        返回 [(对话 id, 对方代号, 对方的端到端公钥或 None)]；不需要移动、或者单独进空位的人没有对话。"""
         with self.store.read() as r:
             me = r.member(member_id)
             if not me or not me["pool_id"]:
@@ -467,19 +493,22 @@ class Service:
             if pool["state"] not in ("confirming", "executing"):
                 return []
             st = self._exec_state(r, pool["id"])
-        mine = execution.member_swaps(st.swaps).get(member_id, [])
-        i = execution.current_swap(st.swaps, st.done, member_id)
-        if i is None and mine:
-            i = mine[-1]
-        partner = st.swaps[i].partner(member_id) if i is not None else None
-        return [(self.chat.open(pool["id"], member_id, partner), st.names[partner])] if partner else []
+            mine = execution.member_swaps(st.swaps).get(member_id, [])
+            i = execution.current_swap(st.swaps, st.done, member_id)
+            if i is None and mine:
+                i = mine[-1]
+            partner = st.swaps[i].partner(member_id) if i is not None else None
+            peer = r.member(partner) if partner else None
+        if not partner:
+            return []
+        return [(self.chat.open(pool["id"], member_id, partner), st.names[partner], peer["e2e_pub"] if peer else None)]
 
     def chat_since(self, member_id: str, after: int) -> list[dict]:
         """只返回当前对话里的新消息（换过搭档的人不会收到旧搭档发来、但页面上已经没有入口的消息）。"""
         msgs = self.chat.since(member_id, after)
         if not msgs:
             return []
-        allowed = {p for p, _ in self.chat_peers(member_id)}
+        allowed = {p for p, _, _ in self.chat_peers(member_id)}
         return [m for m in msgs if m["pair"] in allowed]
 
     # ------------------------------------------------------------------ 查询

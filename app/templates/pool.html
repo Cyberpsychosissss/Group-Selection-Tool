@@ -14,7 +14,12 @@
     <div class="chat-say">
       {% for key, label in quick %}<button type="button" data-say="{{ key }}">{{ label }}</button>{% endfor %}
     </div>
-    <p class="muted small">一对一，只能发预设短语。不存储，15 分钟后或全部完成后清除。</p>
+    <div class="chat-wx">
+      <input id="chat-wx" placeholder="你的微信号" maxlength="32" autocomplete="off">
+      <button type="button" data-wx title="微信号只在你和对方的浏览器之间加密传递，服务器只转发密文">加我微信细说</button>
+    </div>
+    <p class="muted small" id="chat-e2e-hint"></p>
+    <p class="muted small">一对一。预设短语明文；微信号端到端加密，服务器只转发密文、不保存。15 分钟后或全部完成后清除。</p>
   </div>
 </aside>
 {% endblock %}

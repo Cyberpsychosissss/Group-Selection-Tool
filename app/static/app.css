@@ -150,3 +150,25 @@ h3 { font-size: 15px; margin: 0 0 6px; }
 .table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
 .table th, .table td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--line); }
 .table th { color: var(--muted); font-weight: 600; font-size: 12px; }
+
+/* ---------- 使用流程页 ---------- */
+.steps.flow { margin: 10px 0 6px; }
+.plain { padding-left: 20px; margin: 6px 0; display: grid; gap: 6px; }
+.table td:first-child { white-space: nowrap; font-weight: 600; }
+@media (max-width: 520px) { .table td:first-child { white-space: normal; } }
+
+/* ---------- 引导气泡 ---------- */
+#tour[hidden] { display: none; }
+.tour-box { position: fixed; border-radius: 12px; z-index: 50; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45), 0 0 0 3px var(--accent); transition: left .15s, top .15s, width .15s, height .15s; }
+.tour-bubble { position: fixed; z-index: 51; width: min(340px, calc(100vw - 24px)); background: var(--card); color: var(--text);
+  border: 1px solid var(--accent); border-radius: 12px; padding: 12px 14px; box-shadow: 0 8px 28px rgba(0, 0, 0, .3); }
+.tour-bubble h4 { margin: 0 0 4px; font-size: 15px; }
+.tour-bubble p { margin: 0 0 10px; font-size: 14px; line-height: 1.5; }
+.tour-nav { display: flex; gap: 8px; align-items: center; }
+.tour-nav button { padding: 5px 10px; font-size: 13px; }
+.tour-nav .tour-n { margin-left: auto; font-size: 12px; color: var(--muted); }
+#chat-log li.e2e small { color: var(--ok); }
+.chat-wx { display: flex; gap: 6px; margin-top: 6px; }
+.chat-wx input { flex: 1; min-width: 0; font-size: 13px; padding: 5px 10px; }
+.chat-wx button { font-size: 13px; padding: 5px 10px; white-space: nowrap; }
