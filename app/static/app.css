@@ -179,5 +179,3 @@ h3 { font-size: 15px; margin: 0 0 6px; }
 .table tr.me td .muted, .table tr.me td form { font-weight: normal; }
 .members .group-tools { margin: 0; padding: 0; border: 0; }
 .team-actions { gap: 10px; }
-details.alt summary { cursor: pointer; }
-details.alt h3 { margin-bottom: 4px; }

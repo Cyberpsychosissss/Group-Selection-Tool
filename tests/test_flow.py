@@ -100,7 +100,7 @@ def test_http_flow_and_live_polling():
     r = client.post("/register", data={"nickname": "N1", "grp": "N"}, follow_redirects=False)
     assert r.status_code == 303 and "gst" in r.cookies
     client.cookies = r.cookies
-    assert "创建池" in client.get("/").text
+    assert "创建意向组" in client.get("/").text and "创建池" not in client.get("/").text  # 旧的整组池入口不再显示
     client.post("/pool/create", data={"lm_count": 2})
     page = client.get("/pool")
     assert "邀请" in page.text and "N 还差 1 人" in page.text and "data-copy" in page.text

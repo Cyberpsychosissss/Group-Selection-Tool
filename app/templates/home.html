@@ -68,22 +68,6 @@
     </form>
   </section>
 </div>
-<details class="card small alt">
-  <summary>另一种方式：整组池（几个组全员加入、互选小队后一起换）</summary>
-  <div class="grid2" style="margin-top: 12px">
-    <form method="post" action="/pool/join" class="stack">
-      <h3>加入池</h3>
-      <label>邀请码<input name="code" required maxlength="8" class="mono"></label>
-      {{ count_field(me.grp, hint="本组首个加入者填写", value="5") }}
-      <button>加入</button>
-    </form>
-    <form method="post" action="/pool/create" class="stack">
-      <h3>创建池</h3>
-      {{ count_field(me.grp, hint="本组首个加入者填写", value="5") }}
-      <button>创建</button>
-    </form>
-  </div>
-</details>
 {% endif %}
 
 <details class="card small recover">
