@@ -72,14 +72,14 @@ def _base_url(request: Request) -> str:
 
 def _cross_site(request: Request) -> bool:
     """POST 只接受本站页面发出的请求：靠浏览器的 Sec-Fetch-Site / Origin 头判断。
-    （Cookie 的 SameSite=Lax 挡不住同一个父域名下其他子域发来的表单。）老客户端两个头都没有时放行。"""
+    （Cookie 的 SameSite=Lax 挡不住同一个父域名下其他子域发来的表单。）老客户端两个头都没有时放行。
+    只比对主机名：经过双层反向代理后应用看到的协议不可靠，而协议本身对判断跨站没有意义。"""
     site = request.headers.get("sec-fetch-site", "").lower()
     if site in ("cross-site", "same-site"):
         return True
     if origin := request.headers.get("origin"):
-        host = request.headers.get("host", "").lower()
-        schemes = {request.url.scheme, request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()}
-        return origin.lower() not in {f"{sch}://{host}" for sch in schemes if sch}
+        origin_host = origin.split("://", 1)[-1].split("/", 1)[0].lower()
+        return origin_host != request.headers.get("host", "").lower()
     return False
 
 

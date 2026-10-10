@@ -41,6 +41,17 @@ GST_DEV=0 GST_ACCESS_CODE=<口令> GST_ADMIN_KEY=<长随机串> GST_TRUST_PROXY=
 GST_ACCESS_CODE=<口令> ./run.sh
 ```
 
+## 树莓派上的部署（当前线上）
+
+`deploy/group-selection-tool.service` 是用户级 systemd unit（复制到 `~/.config/systemd/user/`），环境变量照 `deploy/env.example` 写到
+`~/.config/group-selection-tool/env`。服务只绑 docker 网桥 `172.17.0.1:8147`，由 Nginx Proxy Manager 反代到 `group.wtfareudoing.com`；
+链路是 VPS nginx → frp → NPM 两层追加 `X-Forwarded-For`，所以 `GST_PROXY_HOPS=2`。
+
+```bash
+systemctl --user daemon-reload && systemctl --user enable --now group-selection-tool
+journalctl --user -u group-selection-tool -n 50
+```
+
 ## 流程里的几个"后门"
 
 - **本组人数填错**：互选阶段本组任何人可以在池页面更正（不能少于已加入的人数）。

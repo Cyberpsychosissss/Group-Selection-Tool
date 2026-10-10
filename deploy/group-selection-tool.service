@@ -1,0 +1,16 @@
+[Unit]
+Description=ISA302 换组助手 — group.wtfareudoing.com (FastAPI + SQLite，单 worker；口令/管理 key 在 ~/.config/group-selection-tool/env)
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/zihao/services/group-selection-tool
+EnvironmentFile=%h/.config/group-selection-tool/env
+# 只绑 docker 网桥地址给 NPM 用；--forwarded-allow-ips 让 uvicorn 信任 NPM 容器发来的代理头
+ExecStart=/home/zihao/services/group-selection-tool/.venv/bin/uvicorn app.web:app --host 172.17.0.1 --port 8147 --workers 1 --proxy-headers --forwarded-allow-ips 172.17.0.0/16 --log-level warning
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
