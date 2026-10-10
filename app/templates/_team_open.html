@@ -1,0 +1,77 @@
+{# 意向组：组建 / 等待分配（还没进入某一轮） #}
+{% if not v.locked %}
+<section class="card">
+  <h2>邀请</h2>
+  <div class="share">
+    <input readonly value="{{ invite_url }}" class="mono">
+    <button type="button" data-copy="ISA302 换组 · 加入我的意向组（登记你现在的组号和那个组的人数）：{{ invite_url }}">复制</button>
+  </div>
+  <p class="muted small">发给想一起组队的人（含你最多 5 人）。每个人加入时登记自己现在的组号和该组在 LM Core 上的人数。不用拉别的组的人。</p>
+</section>
+{% endif %}
+
+{% if me.grp is none %}
+<section class="card highlight">
+  <h2>你暂时无组</h2>
+  <p>先在 LM Core 加入一个组，然后在这里更新组号和该组现在的人数（含你）：</p>
+  <form method="post" action="/me/group" class="row">
+    <select name="grp">{% for g in groups %}<option>{{ g }}</option>{% endfor %}</select>
+    <input type="number" name="lm_count" min="1" max="5" value="1" required title="该组现在的人数（含你）">
+    <button class="primary">我已加入该组</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="card members">
+  <h2>成员 <span class="muted small">{{ v.members|length }}/5</span></h2>
+  <table class="table">
+    <tr><th>代号</th><th>现在的组</th><th>该组人数</th><th></th></tr>
+    {% for m in v.members %}
+    <tr class="{{ 'me' if m.id == me.id }}">
+      <td>{{ m.name }}{% if m.leader %} <small class="badge">组长</small>{% endif %}{% if m.id == me.id %} <small class="muted">我</small>{% endif %}</td>
+      <td>{{ m.grp or "暂无组" }}</td>
+      <td>{{ m.count if m.count is not none else "—" }}</td>
+      <td>{% if m.id == me.id and me.grp %}
+        <form method="post" action="/pool/count" class="row group-tools">
+          <input type="number" name="lm_count" min="1" max="5" value="{{ v.my_count or '' }}" required title="{{ me.grp }} 组在 LM Core 上的人数（含不参加的人）">
+          <button class="chip">更正 {{ me.grp }} 组人数</button>
+        </form>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted small">人数 = LM Core 表格 Members 列里该组现在的人数（含不参加本工具的人）。爬虫两小时内更新过的组以爬虫为准。</p>
+</section>
+
+<section class="card cands">
+  <h2>坐得下吗</h2>
+  <table class="table">
+    <tr><th>组</th><th>LM Core 人数</th><th>其中本组成员</th><th>空位</th><th>整队搬去</th></tr>
+    {% for c in v.candidates %}
+    <tr>
+      <td>{{ c.grp }}</td>
+      <td>{{ c.count if c.count is not none else "未知" }}</td>
+      <td>{{ c.team_in }}</td>
+      <td>{{ c.free if c.free is not none else "—" }}</td>
+      <td>{% if c.busy %}<span class="muted">另一轮进行中</span>{% elif c.feasible %}<span class="ok">可以</span>{% elif c.short is not none %}<span class="muted">还差 {{ c.short }} 个空位</span>{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if v.extras %}<p class="small muted">空位够整队搬入的其他组：{% for e in v.extras %}{{ e.grp }}（{{ e.count }} 人，空 {{ e.free }}）{% if not loop.last %}、{% endif %}{% endfor %}。</p>{% endif %}
+  <p class="muted small">全站统一分配：所有宣布到齐的意向组放在一起算，让最多的人一次如愿、移动最少；意向组之间可以互换位置，所以上面全都"坐不下"也可能一起成功。
+    不参加本工具的人谁都不会被动。{% if v.others_waiting %}目前另有 {{ v.others_waiting }} 个意向组在等待。{% endif %}</p>
+</section>
+
+<section class="card">
+  <div class="row team-actions">
+    {% if v.is_leader %}
+      {% if not v.locked %}
+      <form method="post" action="/team/lock"><button class="primary" {{ "disabled" if not v.can_lock }}>成员已到齐，等待分配</button></form>
+      {% else %}
+      {% if v.paused %}<form method="post" action="/team/resume"><button class="primary">重新参与分配</button></form>{% endif %}
+      <form method="post" action="/team/unlock"><button class="ghost">重新开放加入</button></form>
+      {% endif %}
+    {% endif %}
+    <form method="post" action="/team/leave"><button class="ghost" {{ "disabled" if v.locked }}>退出意向组</button></form>
+  </div>
+  <p class="muted small">{% if v.is_leader %}宣布到齐后不能再加入 / 退出；要改成员就「重新开放加入」。{% else %}{{ "组长已宣布成员到齐，等待分配中。" if v.locked else "等组长宣布成员到齐；宣布之后不能再加入 / 退出。" }}{% endif %}</p>
+</section>

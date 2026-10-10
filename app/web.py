@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -119,8 +119,10 @@ async def guard(request: Request, call_next):
     request.state.ip = ip
 
     if not all(limiter.allow(key, n, window) for key, n, window in _limits(request, device, ip)):
-        resp = (Response(status_code=429) if path == "/pool/live"
+        resp = (Response(status_code=429) if path in ("/pool/live",) or path.startswith("/api/")
                 else _notice(request, "操作太频繁", "请稍等一分钟再试。", 429))
+    elif path.startswith("/api/"):  # 爬虫接口：Bearer 令牌鉴权，不用口令、不看 Origin
+        resp = await call_next(request)
     elif request.method == "POST" and _cross_site(request):
         resp = _notice(request, "请求被拒绝", "请从本站页面操作。", 403)
     elif (config.ACCESS_CODE and path != "/gate"
@@ -222,20 +224,21 @@ def _run(fn, *args, ok: str = "/", fail: str = "/") -> RedirectResponse:
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     me = _me(request)
-    if me and me["pool_id"]:
+    if me and (me["pool_id"] or me["team_id"]):
         return _back("/pool", request.query_params.get("err"))
-    return _render(request, "home.html", me=me, invite=None)
+    return _render(request, "home.html", me=me, invite=None, invite_kind=None)
 
 
 @app.get("/j/{code}", response_class=HTMLResponse)
 def invite(request: Request, code: str):
-    """邀请链接：没登记的人在这一页同时完成登记和加入。"""
+    """邀请链接（意向组或整组池）：没登记的人在这一页同时完成登记和加入。"""
     me = _me(request)
-    if me and me["pool_id"]:
+    if me and (me["pool_id"] or me["team_id"]):
         return _back("/pool")
-    if not svc.pool_exists(code):
-        return _back("/", "邀请链接无效，可能池已经被删除")
-    return _render(request, "home.html", me=me, invite=code.upper())
+    kind = svc.invite_kind(code)
+    if not kind:
+        return _back("/", "邀请链接无效，可能意向组 / 池已经被删除")
+    return _render(request, "home.html", me=me, invite=code.upper(), invite_kind=kind)
 
 
 @app.get("/guide", response_class=HTMLResponse)
@@ -290,19 +293,19 @@ def register(request: Request, nickname: str = Form(...), grp: str = Form(...), 
         return _login(token)
     me = svc.current(token)
     try:
-        svc.join_pool(me["id"], code, lm_count)
+        svc.join(me["id"], code, lm_count)
     except UserError as e:
         return _login(token, f"/?err={quote(str(e))}")
     return _login(token, "/pool")
 
 
 @app.post("/me/group")
-def change_group(request: Request, grp: str = Form(...)):
+def change_group(request: Request, grp: str = Form(...), lm_count: int | None = Form(None)):
     me = _me(request)
     if not me:
         return _back("/")
-    dest = "/pool" if me["pool_id"] else "/"
-    return _run(svc.change_group, me["id"], grp, ok=dest, fail=dest)
+    dest = "/pool" if (me["pool_id"] or me["team_id"]) else "/"
+    return _run(svc.change_group, me["id"], grp, lm_count, ok=dest, fail=dest)
 
 
 @app.get("/login/{token}")
@@ -342,7 +345,76 @@ def pool_join(request: Request, code: str = Form(...), lm_count: int = Form(5)):
 @app.post("/pool/leave")
 def pool_leave(request: Request):
     me = _me(request)
-    return _run(svc.leave_pool, me["id"], ok="/", fail="/pool") if me else _back("/")
+    return _run(svc.leave, me["id"], ok="/", fail="/pool") if me else _back("/")
+
+
+# ---------------------------------------------------------------- 意向组
+
+@app.post("/team/create")
+def team_create(request: Request, lm_count: int = Form(...)):
+    me = _me(request)
+    return _run(svc.create_team, me["id"], lm_count, ok="/pool") if me else _back("/")
+
+
+@app.post("/team/join")
+def team_join(request: Request, code: str = Form(...), lm_count: int = Form(...)):
+    me = _me(request)
+    return _run(svc.join_team, me["id"], code, lm_count, ok="/pool", fail=f"/j/{code}") if me else _back("/")
+
+
+@app.post("/team/leave")
+def team_leave(request: Request):
+    me = _me(request)
+    return _run(svc.leave_team, me["id"], ok="/", fail="/pool") if me else _back("/")
+
+
+@app.post("/team/lock")
+def team_lock(request: Request):
+    return _pool_action(request, svc.lock_team)
+
+
+@app.post("/team/unlock")
+def team_unlock(request: Request):
+    return _pool_action(request, svc.unlock_team)
+
+
+@app.post("/team/resume")
+def team_resume(request: Request):
+    return _pool_action(request, svc.resume_team)
+
+
+# ---------------------------------------------------------------- 爬虫接口：各组人数
+
+def _api_ok(request: Request) -> bool:
+    auth = request.headers.get("authorization", "")
+    token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    return bool(config.COUNTS_TOKEN and token and hmac.compare_digest(token, config.COUNTS_TOKEN))
+
+
+@app.get("/api/counts")
+def api_counts_get(request: Request):
+    if not _api_ok(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return {"counts": svc.group_counts()}
+
+
+@app.post("/api/counts")
+async def api_counts_post(request: Request):
+    """爬虫推送：{"counts": {"A": 5, "B": 3, ...}}（也接受直接的 {"A": 5, ...}）。
+    写入各组人数，立刻跑一次全站分配；返回更新了几个组、新开了哪几轮。"""
+    if not _api_ok(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = json.loads(await request.body() or b"{}")
+    except ValueError:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    counts = body.get("counts", body) if isinstance(body, dict) else None
+    if not isinstance(counts, dict) or not counts:
+        return JSONResponse({"error": "expected {\"counts\": {\"A\": 5, ...}}"}, status_code=400)
+    try:
+        return svc.update_counts({str(k).strip().upper(): v for k, v in counts.items()})
+    except UserError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
 
 @app.post("/pool/count")
@@ -500,6 +572,14 @@ def admin_delete_pool(request: Request, pool_id: str = Form(...)):
     if not _admin_ok(request):
         return Response(status_code=404)
     svc.delete_pool(pool_id)
+    return _back(_admin_path(request))
+
+
+@app.post("/admin/team/delete")
+def admin_delete_team(request: Request, team_id: str = Form(...)):
+    if not _admin_ok(request):
+        return Response(status_code=404)
+    svc.delete_team(team_id)
     return _back(_admin_path(request))
 
 

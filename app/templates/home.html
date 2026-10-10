@@ -5,14 +5,14 @@
 <select name="grp">{% for g in groups %}<option {{ "selected" if g == selected }}>{{ g }}</option>{% endfor %}</select>
 {% endmacro %}
 
-{% macro count_field(grp=None) %}
-<label>{{ (grp ~ " 组") if grp else "本组" }}人数 <span class="hint">LM Core 表格 Members 列；本组首个加入者填写</span>
-  <input type="number" name="lm_count" min="1" max="5" value="5"></label>
+{% macro count_field(grp=None, hint=None, value="") %}
+<label>{{ (grp ~ " 组") if grp else "本组" }}现在的人数 <span class="hint">{{ hint or "LM Core 表格 Members 列里该组的人数，含不参加本工具的人" }}</span>
+  <input type="number" name="lm_count" min="1" max="5" value="{{ value }}" placeholder="1–5" required></label>
 {% endmacro %}
 
 {% if not me %}
 <section class="card">
-  <h1>{{ "加入池 " ~ invite if invite else "登记" }}</h1>
+  <h1>{% if invite %}{{ "加入意向组 " if invite_kind == "team" else "加入池 " }}{{ invite }}{% else %}登记{% endif %}</h1>
   <p class="muted small">第一次用？先看 <a href="/guide">使用流程</a>，两分钟。</p>
   <form method="post" action="/register" class="stack">
     {% if invite %}<input type="hidden" name="code" value="{{ invite }}">{% endif %}
@@ -20,7 +20,7 @@
       <input name="nickname" required maxlength="20" autocomplete="off"></label>
     <label>当前组 <span class="hint">LM Core Grouping 页 Your selection</span>
       {{ group_select() }}</label>
-    {% if invite %}{{ count_field() }}{% endif %}
+    {% if invite %}{{ count_field(hint=("本组首个加入者填写" if invite_kind == "pool" else None), value=("5" if invite_kind == "pool" else "")) }}{% endif %}
     <button class="primary">{{ "登记并加入" if invite else "登记" }}</button>
   </form>
 </section>
@@ -37,34 +37,56 @@
 
 {% if invite %}
 <section class="card">
-  <h2>加入池 <code>{{ invite }}</code></h2>
-  <form method="post" action="/pool/join" class="stack">
+  <h2>加入{{ "意向组" if invite_kind == "team" else "池" }} <code>{{ invite }}</code></h2>
+  <form method="post" action="{{ '/team/join' if invite_kind == 'team' else '/pool/join' }}" class="stack">
     <input type="hidden" name="code" value="{{ invite }}">
-    {{ count_field(me.grp) }}
+    {{ count_field(me.grp, hint=("本组首个加入者填写" if invite_kind == "pool" else None), value=("5" if invite_kind == "pool" else "")) }}
     <button class="primary">加入</button>
   </form>
 </section>
 {% else %}
+<section class="card intro">
+  <h2>怎么用</h2>
+  <p>想一起组队的人建一个<b>意向组</b>：组长创建、把邀请链接发给队友，每个人登记自己现在的组号和该组人数。
+    组长宣布到齐后，系统把<b>全站所有意向组放在一起算</b>：有组坐得下、或几个意向组能互换位置时就自动分配，再按提示轮流去 LM Core 操作。
+    不参加本工具的人谁都不会被动。</p>
+</section>
 <div class="grid2">
   <section class="card">
-    <h2>加入池</h2>
-    <form method="post" action="/pool/join" class="stack">
+    <h2>创建意向组</h2>
+    <form method="post" action="/team/create" class="stack">
+      {{ count_field(me.grp) }}
+      <button class="primary">创建</button>
+    </form>
+  </section>
+  <section class="card">
+    <h2>加入意向组</h2>
+    <form method="post" action="/team/join" class="stack">
       <label>邀请码<input name="code" required maxlength="8" class="mono"></label>
       {{ count_field(me.grp) }}
       <button class="primary">加入</button>
     </form>
   </section>
-  <section class="card">
-    <h2>创建池</h2>
-    <form method="post" action="/pool/create" class="stack">
-      {{ count_field(me.grp) }}
-      <button class="primary">创建</button>
-    </form>
-  </section>
 </div>
+<details class="card small alt">
+  <summary>另一种方式：整组池（几个组全员加入、互选小队后一起换）</summary>
+  <div class="grid2" style="margin-top: 12px">
+    <form method="post" action="/pool/join" class="stack">
+      <h3>加入池</h3>
+      <label>邀请码<input name="code" required maxlength="8" class="mono"></label>
+      {{ count_field(me.grp, hint="本组首个加入者填写", value="5") }}
+      <button>加入</button>
+    </form>
+    <form method="post" action="/pool/create" class="stack">
+      <h3>创建池</h3>
+      {{ count_field(me.grp, hint="本组首个加入者填写", value="5") }}
+      <button>创建</button>
+    </form>
+  </div>
+</details>
 {% endif %}
 
-<details class="card small">
+<details class="card small recover">
   <summary>恢复链接（换设备时使用，勿外传）</summary>
   <code class="wrap">{{ base_url }}login/{{ request.cookies.get("gst") }}</code>
 </details>

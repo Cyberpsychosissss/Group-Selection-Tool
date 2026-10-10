@@ -27,13 +27,23 @@ document.addEventListener("submit", function (e) {
     register: [
       ["form[action='/register'] input[name=nickname]", "代号", "同组同学能认出你就行，最多 20 字，不能和别人重复。一台设备只能登记一个代号。"],
       ["form[action='/register'] select[name=grp]", "当前组", "打开 LM Core 的 Grouping 页，看 Your selection 显示的组，照着选。"],
-      ["form[action='/register'] input[name=lm_count]", "本组人数", "LM Core 表格 Members 列里你们组的人数。只有本组第一个加入的人填的数生效，填错了之后可以在池页面更正。"],
+      ["form[action='/register'] input[name=lm_count]", "该组现在的人数", "LM Core 表格 Members 列里你现在这个组的人数，含不参加本工具的人。系统靠它判断哪个组坐得下。"],
       ["form[action='/register'] button.primary", "登记", "点这里。登记后首页底部会有「恢复链接」，换设备时用它找回身份。"]],
     home: [
-      ["form[action='/me/group']", "你的身份", "代号和当前组。还没进池时组号填错了可以直接改。"],
-      ["form[action='/pool/create']", "发起人：创建池", "想一起换的几个组里任选一人创建池：填本组人数，创建后把邀请链接发到各组群。"],
-      ["form[action='/pool/join']", "其他人：加入池", "填邀请码加入。直接点同学发的邀请链接更省事。"],
-      ["details.card", "恢复链接", "换设备或清了浏览器数据时用它找回身份。不要外传。"]],
+      ["form[action='/me/group']", "你的身份", "代号和当前组。还没进意向组时组号填错了可以直接改。"],
+      [".intro", "怎么用", "想一起组队的人建一个意向组，各自登记现在的组号和该组人数；系统把全站所有意向组放在一起算，坐得下或能互换时自动分配。"],
+      ["form[action='/team/create']", "组长：创建意向组", "填你现在这个组在 LM Core 上的人数，创建后把邀请链接发给队友。"],
+      ["form[action='/team/join']", "队友：加入意向组", "填邀请码和你现在这个组的人数。直接点组长发的邀请链接更省事。"],
+      ["details.alt", "另一种方式", "整组池：几个组全员加入、互选小队后一起换。一般用不到，意向组够用。"],
+      ["details.recover", "恢复链接", "换设备或清了浏览器数据时用它找回身份。不要外传。"]],
+    "pool-team": [
+      [".steps", "五个阶段", "组建 → 等待分配 → 确认 → 执行 → 完成。页面每 2.5 秒自动刷新，不用手动刷。"],
+      [".todo", "下一步", "这里永远告诉你现在该做什么、在等什么。"],
+      [".share", "邀请链接", "发给想一起组队的人，最多 5 人。不用拉别的组的人。"],
+      [".members", "成员", "每个人现在的组号和该组人数。自己组的人数填错了可以在这里更正；有爬虫数据时以爬虫为准。"],
+      [".cands", "坐得下吗", "按各组人数判断整队能不能搬进某个组。全都坐不下也别急：系统把全站的意向组放在一起算，几个意向组互换位置也算成功。"],
+      [".team-actions", "组长的按钮", "人齐了点「成员已到齐，等待分配」。之后不能再加入 / 退出；要改成员就「重新开放加入」。方案被否决后点「重新参与分配」。"],
+      [".timeline", "记录", "谁加入、谁填报了人数、什么时候进入分配，全组可见。"]],
     "pool-open": [
       [".steps", "四个阶段", "互选 → 确认 → 执行 → 完成。页面每 2.5 秒自动刷新，不用手动刷。"],
       [".todo", "下一步", "这里永远告诉你现在该做什么、在等谁。"],
@@ -43,17 +53,17 @@ document.addEventListener("submit", function (e) {
       ["form[action='/pool/plan']", "生成方案", "三个条件都打勾后，任何人都可以点。系统会算出移动人数最少的方案。"],
       [".timeline", "记录", "谁加入、谁互选、谁操作了，全池可见。"]],
     "pool-confirming": [
-      [".card.highlight", "你的安排", "和谁互换、留在原组还是进空位，以及新组员。看清楚后点同意；任何一人不同意都会退回互选。"],
-      [".groups", "新分组", "每个人的去向，以及谁已经同意。"]],
+      [".card.highlight", "你的安排", "和谁互换、留在原组还是进空位，以及新组员。看清楚后点同意；任何一人不同意都会退回。"],
+      [".groups", "新分组", "每个人的去向，以及谁已经同意。「组内其他人」是方案里不动的人，不需要表态。"]],
     "pool-executing": [
       [".card.go", "轮到你了", "按提示去 LM Core 操作，点 Save my choice，回来点「已在 LM Core 保存」。右侧示意图告诉你取消哪个、勾选哪个。"],
       [".card.highlight:not(.go)", "等待", "轮到你时这张卡会变绿并提示。没轮到之前不要在 LM Core 操作。"],
       [".progress", "进度", "多少人已到位、各组此刻人数。"],
       ["#chat", "一对一对话", "和交换对象的私聊：预设短语，或「加我微信细说」。微信号端到端加密，服务器只转发密文、不保存。"],
-      [".card.highlight details", "出了问题", "有人操作错、失联，或目标组被池外的人占了：任何人可以中止执行，退回互选。"]],
+      [".card.highlight details", "出了问题", "有人操作错、失联，或目标组被别人占了：任何人可以中止执行。"]],
     "pool-done": [
       [".groups", "最终分组", "去 LM Core 核对一下 Your selection。"],
-      ["form[action='/pool/leave']", "再来一轮", "各组已释放。退出池后可以创建或加入新的池。"]]
+      ["form[action='/team/leave'], form[action='/pool/leave']", "再来一轮", "退出后可以重新创建或加入。"]]
   };
 
   function q(sel) { return document.querySelector(sel); }
@@ -62,7 +72,7 @@ document.addEventListener("submit", function (e) {
     if (q("form[action='/register']")) return "register";
     var todo = q("#live .todo");
     if (todo) { var m = /s-(\w+)/.exec(todo.className); return m ? "pool-" + m[1] : null; }
-    if (q("form[action='/pool/create']") || q("form[action='/pool/join']")) return "home";
+    if (q("form[action='/team/create']") || q("form[action='/pool/create']") || q("form[action='/pool/join']")) return "home";
     return null;
   }
   function visible(el) {
@@ -188,7 +198,7 @@ document.addEventListener("submit", function (e) {
   function encrypt(pair, text) {
     var c = chats.filter(function (x) { return x.pair === pair; })[0];
     return pairKey(pair, c && c.key).then(function (key) {
-      if (!key) throw new Error("对方还没打开过池页面，拿不到他的密钥，稍后再试");
+      if (!key) throw new Error("对方还没打开过页面，拿不到他的密钥，稍后再试");
       var iv = crypto.getRandomValues(new Uint8Array(12));
       return subtle.encrypt({ name: "AES-GCM", iv: iv }, key, new TextEncoder().encode(text)).then(function (ct) { return { iv: b64(iv), ct: b64(ct) }; });
     });
@@ -249,7 +259,7 @@ document.addEventListener("submit", function (e) {
     var canE2E = !!(subtle && current && current.key);
     panel.querySelectorAll("[data-wx], #chat-wx").forEach(function (el) { el.disabled = !canE2E; });
     var hint = document.getElementById("chat-e2e-hint");
-    if (hint) hint.textContent = !subtle ? "此浏览器不支持端到端加密，微信号功能不可用。" : canE2E ? "" : "对方还没打开过池页面，暂时拿不到他的密钥。";
+    if (hint) hint.textContent = !subtle ? "此浏览器不支持端到端加密，微信号功能不可用。" : canE2E ? "" : "对方还没打开过页面，暂时拿不到他的密钥。";
   }
 
   function receive(m) {

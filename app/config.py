@@ -27,6 +27,9 @@ GROUPS = _group_labels(os.environ.get("GST_LAST_GROUP", "CK"))
 LMCORE_URL = "https://core.xjtlu.edu.cn/mod/choicegroup/view.php?id=41683"
 DEADLINE = "2026-10-18 17:00"
 
+# 爬虫推送各组人数的接口 /api/counts 的令牌（Authorization: Bearer <token>）；为空表示接口关闭
+COUNTS_TOKEN = os.environ.get("GST_COUNTS_TOKEN", "")
+
 # 访问口令：正式上线时设置（在课程群里公布），不知道口令的人进不来；为空表示不启用（本地开发）
 ACCESS_CODE = os.environ.get("GST_ACCESS_CODE", "")
 
