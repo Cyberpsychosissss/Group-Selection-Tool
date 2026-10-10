@@ -8,6 +8,10 @@ import logging
 import re
 import secrets
 import sqlite3
+import threading
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from urllib.parse import quote
 
@@ -27,6 +31,7 @@ BASE = Path(__file__).parent
 COOKIE = "gst"  # 身份
 GATE_COOKIE = "gst_gate"  # 口令已通过
 DEVICE_COOKIE = "gst_dev"  # 设备标识（限流、一台设备一个代号）
+HOME_COOKIE = "home_session"  # home dashboard 的全域会话，只在管理页用，原样转交 dashboard 验签
 _DEVICE_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 _YEAR = 60 * 60 * 24 * 365
 
@@ -417,9 +422,48 @@ if config.DEV_MODE:
             return _back("/", str(e))
 
 
+_WHOAMI_CACHE: dict[str, tuple[str | None, float]] = {}  # sha256(cookie) → (用户名, 过期时刻)
+_WHOAMI_LOCK = threading.Lock()
+
+
+def _whoami_remote(cookie: str) -> str | None:
+    """把 home_session 原样转交 dashboard，让它自己验签；只认它回的用户名。401 / 超时 / 格式不对都当作无身份。"""
+    req = urllib.request.Request(config.WHOAMI_URL, headers={"Cookie": f"{HOME_COOKIE}={cookie}"})
+    try:
+        with urllib.request.urlopen(req, timeout=4) as r:
+            data = json.loads(r.read(1 << 16))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    user = data.get("user") if isinstance(data, dict) else None
+    return user.strip() if isinstance(user, str) and user.strip() else None
+
+
+def _home_user(request: Request) -> str | None:
+    """当前请求的 home 身份。结果缓存：有身份 60 秒、无身份 15 秒，管理页的每个操作不用都敲一次 dashboard。"""
+    cookie = request.cookies.get(HOME_COOKIE, "")
+    if not cookie or not config.WHOAMI_URL:
+        return None
+    key = hashlib.sha256(cookie.encode()).hexdigest()
+    now = time.monotonic()
+    with _WHOAMI_LOCK:
+        hit = _WHOAMI_CACHE.get(key)
+        if hit and hit[1] > now:
+            return hit[0]
+    user = _whoami_remote(cookie)
+    with _WHOAMI_LOCK:
+        if len(_WHOAMI_CACHE) > 1000:  # 防被垃圾 cookie 撑爆
+            _WHOAMI_CACHE.clear()
+        _WHOAMI_CACHE[key] = (user, now + (60 if user else 15))
+    return user
+
+
 def _admin_ok(request: Request) -> bool:
+    if config.DEV_MODE:
+        return True
+    if config.WHOAMI_URL:  # 只认 home dashboard 的 admin 会话，不再接受 ?key=
+        return _home_user(request) == config.ADMIN_USER
     key = request.query_params.get("key", "")
-    return config.DEV_MODE or bool(config.ADMIN_KEY and hmac.compare_digest(key, config.ADMIN_KEY))
+    return bool(config.ADMIN_KEY and hmac.compare_digest(key, config.ADMIN_KEY))
 
 
 def _admin_path(request: Request) -> str:

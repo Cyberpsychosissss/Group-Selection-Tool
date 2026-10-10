@@ -451,3 +451,46 @@ def test_pool_page_renders_in_every_state():
     assert "a1" in page("b1")  # 退出的人仍显示在最终分组里
     admin = TestClient(app).get("/admin").text
     assert code in admin and "删除" in admin
+
+
+# ---------- 管理页：只认 home dashboard 的 admin 会话 ----------
+
+def test_admin_requires_home_admin_session(monkeypatch):
+    from app import web
+
+    monkeypatch.setattr(config, "DEV_MODE", False)
+    monkeypatch.setattr(config, "WHOAMI_URL", "http://dashboard.test/api/whoami")
+    monkeypatch.setattr(config, "ADMIN_KEY", "k")
+    web._WHOAMI_CACHE.clear()
+    seen = []
+    monkeypatch.setattr(web, "_whoami_remote", lambda cookie: seen.append(cookie) or {"good": "admin", "other": "bob"}.get(cookie))
+    c = TestClient(web.app)
+    assert c.get("/admin").status_code == 404                 # 没有 home 会话
+    assert c.get("/admin?key=k").status_code == 404           # 配了 whoami 就不再认 key
+    c.cookies.set("home_session", "other")
+    assert c.get("/admin").status_code == 404                 # 有身份但不是 admin
+    c.cookies.set("home_session", "good")
+    assert c.get("/admin").status_code == 200
+    assert seen == ["other", "good"]                          # 只转交了 cookie 本身
+    monkeypatch.setattr(web, "_whoami_remote", lambda cookie: (_ for _ in ()).throw(AssertionError("应命中缓存")))
+    assert c.get("/admin").status_code == 200                 # 60 秒内不再敲 dashboard
+    assert c.post("/admin/pool/delete", data={"pool_id": "nope"}, follow_redirects=False).status_code == 303
+    web._WHOAMI_CACHE.clear()
+
+
+def test_admin_key_only_when_whoami_not_configured(monkeypatch):
+    from app import web
+
+    monkeypatch.setattr(config, "DEV_MODE", False)
+    monkeypatch.setattr(config, "WHOAMI_URL", "")
+    monkeypatch.setattr(config, "ADMIN_KEY", "k")
+    c = TestClient(web.app)
+    assert c.get("/admin").status_code == 404
+    assert c.get("/admin?key=k").status_code == 200
+
+
+def test_whoami_remote_treats_401_and_errors_as_no_identity(monkeypatch):
+    from app import web
+
+    monkeypatch.setattr(config, "WHOAMI_URL", "http://127.0.0.1:9/api/whoami")  # 没人监听
+    assert web._whoami_remote("x") is None

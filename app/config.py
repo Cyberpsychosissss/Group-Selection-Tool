@@ -15,7 +15,13 @@ def _group_labels(last: str = "CK") -> list[str]:
 
 DB_PATH = os.environ.get("GST_DB", "data/app.db")
 DEV_MODE = os.environ.get("GST_DEV", "0") == "1"  # 开发模式：显示身份切换栏（默认关闭，run.sh 本地启动时打开）
-ADMIN_KEY = os.environ.get("GST_ADMIN_KEY", "")  # 非开发模式下进入 /admin 需要 ?key=
+# 管理页鉴权（非开发模式）：
+# - 配了 GST_WHOAMI_URL（home dashboard 的 /api/whoami）：只认 home_session cookie 里的 admin 会话。
+#   cookie 原样转交 dashboard 验签，本应用不持有任何签名密钥；配了它就不再接受 ?key=。
+# - 没配 whoami 时退回 GST_ADMIN_KEY：/admin?key=…（key 会进浏览器历史和代理日志，只适合临时用）。
+WHOAMI_URL = os.environ.get("GST_WHOAMI_URL", "")
+ADMIN_USER = os.environ.get("GST_ADMIN_USER", "admin")  # whoami 返回的用户名要等于它
+ADMIN_KEY = os.environ.get("GST_ADMIN_KEY", "")
 CAPACITY = 5
 GROUPS = _group_labels(os.environ.get("GST_LAST_GROUP", "CK"))
 LMCORE_URL = "https://core.xjtlu.edu.cn/mod/choicegroup/view.php?id=41683"

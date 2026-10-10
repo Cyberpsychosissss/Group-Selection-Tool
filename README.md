@@ -19,7 +19,7 @@
 ## 正式模式（上公网时）
 
 ```bash
-GST_DEV=0 GST_ACCESS_CODE=<口令> GST_ADMIN_KEY=<长随机串> GST_TRUST_PROXY=1 GST_PROXY_HOPS=1 \
+GST_DEV=0 GST_ACCESS_CODE=<口令> GST_WHOAMI_URL=http://127.0.0.1:8082/api/whoami GST_TRUST_PROXY=1 GST_PROXY_HOPS=1 \
   .venv/bin/uvicorn app.web:app --host 127.0.0.1 --port 8000 --workers 1 --forwarded-allow-ips '*'
 ```
 
@@ -27,7 +27,9 @@ GST_DEV=0 GST_ACCESS_CODE=<口令> GST_ADMIN_KEY=<长随机串> GST_TRUST_PROXY=
 - `GST_ACCESS_CODE`：访问口令，所有页面都要先输入。不设置就不启用。建议用一串不在字典里的字符（10 位以上）：
   按 IP 的保护只是每分钟限速（校园网大家共用出口 IP，不能一锁锁全校），真正挡猜测的是口令本身。
 - `GST_DEV=0`：关掉身份切换栏，Cookie 加上 Secure（必须走 HTTPS）。
-- `GST_ADMIN_KEY`：管理页需要 `/admin?key=…`。管理页可以按池删除，也可以清空全部数据。
+- 管理页（按池删除 / 清空全部）：设 `GST_WHOAMI_URL=http://127.0.0.1:8082/api/whoami` 时只认 home dashboard 的 admin 会话——
+  `home_session` cookie 原样转交 dashboard 验签，本应用不持有任何签名密钥，配了它就不再接受 `?key=`（`GST_ADMIN_USER` 默认 `admin`）。
+  没有 dashboard 的环境才用 `GST_ADMIN_KEY` + `/admin?key=…`（key 会进浏览器历史和代理日志）。
 - `GST_TRUST_PROXY=1`：前面有 Caddy / nginx 等反向代理时打开。作用有两个：按 `X-Forwarded-For` 里的真实 IP 限流；
   按 `X-Forwarded-Proto` / `X-Forwarded-Host` 生成邀请链接和恢复链接（否则链接会是 `http://`）。
 - `GST_PROXY_HOPS`：前面有几层会往 `X-Forwarded-For` **追加**地址的代理，真实 IP 取从右数第几个（默认 1）。
