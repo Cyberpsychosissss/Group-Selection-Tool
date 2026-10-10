@@ -1,13 +1,24 @@
 {% extends "base.html" %}
 {% block content %}
+{% set q = ('?key=' ~ key) if key else '' %}
 <section class="card">
   <h1>管理</h1>
   <p>登记 {{ stats.members }} 人；池：{% for state, n in stats.pools.items() %}{{ state }} {{ n }}{% if not loop.last %}，{% endif %}{% else %}无{% endfor %}</p>
+  {% if stats.pool_list %}
+  <table class="table">
+    <tr><th>邀请码</th><th>状态</th><th>人数</th><th>创建时间</th><th></th></tr>
+    {% for p in stats.pool_list %}
+    <tr><td class="mono">{{ p.code }}</td><td>{{ p.state }}</td><td>{{ p.members }}</td><td class="muted small">{{ p.created_at[:16] }}</td>
+      <td><form method="post" action="/admin/pool/delete{{ q }}" data-confirm="删除池 {{ p.code }}？成员回到未加入状态，方案和记录删除。">
+        <input type="hidden" name="pool_id" value="{{ p.id }}"><button class="chip">删除</button></form></td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
 </section>
 <section class="card danger">
   <h2>删除全部数据</h2>
   <p class="muted small">成员、池、互选、方案、记录全部删除并压缩数据库，不可恢复。</p>
-  <form method="post" action="/admin/purge{{ '?key=' ~ key if key }}" class="row">
+  <form method="post" action="/admin/purge{{ q }}" class="row">
     <input name="confirm" placeholder="输入“删除”确认" required>
     <button class="danger-btn">删除</button>
   </form>

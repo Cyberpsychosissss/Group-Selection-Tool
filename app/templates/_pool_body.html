@@ -2,7 +2,7 @@
 {% set state = v.pool.state %}
 {% set status_text = {"stay": "不动", "done": "已到位", "move": "轮到", "join": "轮到加入",
                       "leave": "需先退出", "homeless": "暂无组", "wait": "等待"} %}
-{% set invite_url = request.base_url ~ "j/" ~ v.pool.code %}
+{% set invite_url = base_url ~ "j/" ~ v.pool.code %}
 
 <section class="card">
   <div class="row between">
@@ -25,8 +25,19 @@
     <input readonly value="{{ invite_url }}" class="mono">
     <button type="button" data-copy="ISA302 换组池（本组全员需加入）：{{ invite_url }}">复制</button>
   </div>
-  <p class="muted small">发到每个参与组的群里。每个组的全部成员加入后才算到齐。</p>
+  <p class="muted small">发到每个参与组的群里。每个组的全部成员加入后才算到齐；有人不肯加入可以给本组添加「占位」代表他（占着位置、不会被移动）。</p>
 </section>
+
+{% if me.grp is none %}
+<section class="card highlight">
+  <h2>你暂时无组</h2>
+  <p>先在 LM Core 加入池内的某个组，然后在这里更新组号：</p>
+  <form method="post" action="/me/group" class="row">
+    <select name="grp">{% for g in v.pool_group_names %}<option>{{ g }}</option>{% endfor %}</select>
+    <button class="primary">我已加入该组</button>
+  </form>
+</section>
+{% endif %}
 
 <section class="card">
   <h2>{{ "互选" if v.wishes_open else "成员" }}</h2>
@@ -37,6 +48,15 @@
       <div class="group-head"><b>{{ g.grp }}</b>
         <span class="{{ 'ok' if g.members|length >= g.lm_count else 'muted' }}">{{ g.members|length }}/{{ g.lm_count }}</span></div>
       {% for m in g.members %}
+        {% if m.ghost %}
+        <div class="person ghost">
+          <span class="muted">占位（未加入）</span>
+          {% if g.mine %}
+          <form method="post" action="/pool/ghost/remove"><input type="hidden" name="ghost_id" value="{{ m.id }}">
+            <button class="chip" title="删除这个占位">删除</button></form>
+          {% endif %}
+        </div>
+        {% else %}
         {% set picked = m.id in v.my_wishes %}{% set picked_me = m.id in v.wished_by %}
         <div class="person {{ 'mutual' if picked and picked_me }}">
           <span>{{ m.nickname }}{% if m.id == me.id %} <small class="muted">我</small>{% endif %}</span>
@@ -51,10 +71,28 @@
           </form>
           {% endif %}
         </div>
+        {% endif %}
       {% endfor %}
       {% for _ in range(g.lm_count - g.members|length) %}<div class="person empty">未加入</div>{% endfor %}
+      {% if g.mine %}
+      <div class="group-tools">
+        {% if g.members|length < g.lm_count %}
+        <form method="post" action="/pool/ghost/add"><button class="chip" title="组里有人不肯加入时，用占位代表他">+ 占位</button></form>
+        {% endif %}
+        <form method="post" action="/pool/count" class="row">
+          <input type="number" name="lm_count" min="{{ [1, g.members|length]|max }}" max="5" value="{{ g.lm_count }}" title="本组在 LM Core 上的人数">
+          <button class="chip">更正人数</button>
+        </form>
+      </div>
+      {% endif %}
     </div>
     {% endfor %}
+    {% if v.homeless %}
+    <div class="group">
+      <div class="group-head"><b>暂无组</b><span class="muted">{{ v.homeless|length }} 人</span></div>
+      {% for m in v.homeless %}<div class="person"><span>{{ m.nickname }}{% if m.id == me.id %} <small class="muted">我</small>{% endif %}</span><small class="st st-homeless">待更新组号</small></div>{% endfor %}
+    </div>
+    {% endif %}
   </div>
 </section>
 
@@ -114,6 +152,11 @@
   <div class="progress"><div style="width: {{ (100 * v.movers_done / v.movers_total)|round|int if v.movers_total else 100 }}%"></div></div>
   <p class="muted small">{{ v.movers_done }}/{{ v.movers_total }} 已到位 · 当前人数
     {% for g, n in v.live_counts.items() %}{{ g }}={{ n }}{% if not loop.last %} {% endif %}{% endfor %}</p>
+  <details class="small">
+    <summary class="muted">执行出了问题？</summary>
+    <p class="muted">有人操作错、失联，或 LM Core 上目标组被池外的人占了：可以中止执行、退回互选。方案作废、互选保留，各组人数按此刻实际情况重算；已退出组的人要先在 LM Core 加入池内某个组再更新组号。</p>
+    <form method="post" action="/pool/abort" data-confirm="确定中止执行、退回互选？全池所有人都会退回。"><button class="ghost">中止执行，退回互选</button></form>
+  </details>
 </section>
 {% endif %}
 
@@ -135,6 +178,12 @@
     </div>
     {% endfor %}
   </div>
+  {% if state == "done" %}
+  <div class="row" style="margin-top: 12px">
+    <form method="post" action="/pool/leave"><button class="primary">退出池</button></form>
+    <span class="muted small">各组已释放。想再换一轮，退出后创建或加入新的池即可；这个池的记录在最后一人退出前保留。</span>
+  </div>
+  {% endif %}
 </section>
 {% endif %}
 

@@ -142,3 +142,11 @@ h3 { font-size: 15px; margin: 0 0 6px; }
 .chat-say { display: flex; flex-wrap: wrap; gap: 6px; }
 .chat-say button { font-size: 13px; padding: 5px 10px; }
 .quick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; }
+
+/* ---------- 占位 / 组内工具 / 管理表 ---------- */
+.person.ghost span { font-style: italic; }
+.group-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.group-tools input[type=number] { width: 64px; padding: 3px 8px; font-size: 13px; }
+.table { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 8px; }
+.table th, .table td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--line); }
+.table th { color: var(--muted); font-weight: 600; font-size: 12px; }

@@ -65,7 +65,7 @@
 
 <details class="card small">
   <summary>恢复链接（换设备时使用，勿外传）</summary>
-  <code class="wrap">{{ request.base_url }}login/{{ request.cookies.get("gst") }}</code>
+  <code class="wrap">{{ base_url }}login/{{ request.cookies.get("gst") }}</code>
 </details>
 {% endif %}
 {% endblock %}

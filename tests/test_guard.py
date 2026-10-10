@@ -118,7 +118,7 @@ def _req(host, headers=()):
 def test_client_ip(monkeypatch):
     assert _client_ip(_req("127.0.0.1")) is None                # 代理后面拿不到真实 IP：不按 IP 限流
     assert _client_ip(_req("10.1.2.3")) == "10.1.2.3"
-    fwd = [("x-forwarded-for", "1.2.3.4, 127.0.0.1")]
+    fwd = [("x-forwarded-for", "6.6.6.6, 1.2.3.4")]              # 6.6.6.6 是客户端自己塞的，1.2.3.4 是代理追加的
     assert _client_ip(_req("127.0.0.1", fwd)) is None           # 默认不信任转发头（防伪造）
     monkeypatch.setattr(config, "TRUST_PROXY", True)
-    assert _client_ip(_req("127.0.0.1", fwd)) == "1.2.3.4"
+    assert _client_ip(_req("127.0.0.1", fwd)) == "1.2.3.4"      # 取代理追加的那个（从右数第 PROXY_HOPS 个）

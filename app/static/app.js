@@ -12,6 +12,12 @@ document.addEventListener("click", function (e) {
   }
 });
 
+// 1b) 需要二次确认的表单（data-confirm）
+document.addEventListener("submit", function (e) {
+  var f = e.target;
+  if (f.dataset && f.dataset.confirm && !confirm(f.dataset.confirm)) e.preventDefault();
+});
+
 // 2) 池页面：每 2.5 秒轮询一次。rev 没变服务器返回 204；一对一对话的新消息在响应头 X-Msg 里。
 (function () {
   var box = document.getElementById("live");

@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -21,6 +22,7 @@ from .ratelimit import RateLimiter
 from .services import QUICK_NOTES, Service, UserError
 from .store import Store
 
+log = logging.getLogger("gst")
 BASE = Path(__file__).parent
 COOKIE = "gst"  # 身份
 GATE_COOKIE = "gst_gate"  # 口令已通过
@@ -35,7 +37,7 @@ svc = Service(Store(config.DB_PATH), Chat())
 limiter = RateLimiter()
 
 
-# ---------------------------------------------------------------- 守卫：设备标识 → 限流 → 访问口令
+# ---------------------------------------------------------------- 守卫：设备标识 → 限流 → 跨站 POST → 访问口令
 
 def _gate_value() -> str:
     """口令通过后发放的 Cookie 值：用服务器密钥签名，客户端无法伪造；换口令后旧 Cookie 自动失效。"""
@@ -43,14 +45,42 @@ def _gate_value() -> str:
 
 
 def _client_ip(request: Request) -> str | None:
-    """真实客户端 IP。拿不到（经代理但没开 TRUST_PROXY 时全是 127.0.0.1）就返回 None，不按 IP 限流。"""
+    """真实客户端 IP。拿不到（经代理但没开 TRUST_PROXY 时全是 127.0.0.1）就返回 None，不按 IP 限流。
+    开了 TRUST_PROXY 时取 X-Forwarded-For 从右数第 PROXY_HOPS 个（最左边的值客户端可以随便填）。"""
     if config.TRUST_PROXY and (fwd := request.headers.get("x-forwarded-for")):
-        return fwd.split(",")[0].strip()
+        parts = [p.strip() for p in fwd.split(",") if p.strip()]
+        if parts:
+            return parts[-config.PROXY_HOPS] if len(parts) >= config.PROXY_HOPS else parts[0]
     host = request.client.host if request.client else None
     try:
         return None if host is None or ipaddress.ip_address(host).is_loopback else host
     except ValueError:
         return host
+
+
+def _base_url(request: Request) -> str:
+    """生成邀请链接 / 恢复链接用的站点根地址。开了 TRUST_PROXY 就按代理声明的协议和主机名。"""
+    url = request.base_url
+    if config.TRUST_PROXY:
+        proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+        if proto in ("http", "https"):
+            url = url.replace(scheme=proto)
+        if host := request.headers.get("x-forwarded-host", "").split(",")[0].strip():
+            url = url.replace(netloc=host)
+    return str(url)
+
+
+def _cross_site(request: Request) -> bool:
+    """POST 只接受本站页面发出的请求：靠浏览器的 Sec-Fetch-Site / Origin 头判断。
+    （Cookie 的 SameSite=Lax 挡不住同一个父域名下其他子域发来的表单。）老客户端两个头都没有时放行。"""
+    site = request.headers.get("sec-fetch-site", "").lower()
+    if site in ("cross-site", "same-site"):
+        return True
+    if origin := request.headers.get("origin"):
+        host = request.headers.get("host", "").lower()
+        schemes = {request.url.scheme, request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()}
+        return origin.lower() not in {f"{sch}://{host}" for sch in schemes if sch}
+    return False
 
 
 def _limits(request: Request, device: str, ip: str | None) -> list[tuple[str, int, int]]:
@@ -86,6 +116,8 @@ async def guard(request: Request, call_next):
     if not all(limiter.allow(key, n, window) for key, n, window in _limits(request, device, ip)):
         resp = (Response(status_code=429) if path == "/pool/live"
                 else _notice(request, "操作太频繁", "请稍等一分钟再试。", 429))
+    elif request.method == "POST" and _cross_site(request):
+        resp = _notice(request, "请求被拒绝", "请从本站页面操作。", 403)
     elif (config.ACCESS_CODE and path != "/gate"
           and not hmac.compare_digest(request.cookies.get(GATE_COOKIE, "").encode(), _gate_value().encode())):
         resp = Response(status_code=401) if path == "/pool/live" else RedirectResponse(
@@ -108,12 +140,16 @@ async def gate_submit(request: Request, code: str = Form(""), next: str = Form("
     if not next.startswith("/") or next.startswith("//"):  # 只允许站内跳转
         next = "/"
     n, window = config.RL_GATE_FAIL
-    keys = [f"gf:{request.state.device}"] + ([f"gfi:{request.state.ip}"] if request.state.ip else [])
-    if any(limiter.count(k, window) >= n * (10 if k.startswith("gfi:") else 1) for k in keys):
+    dev_key = f"gf:{request.state.device}"
+    if limiter.count(dev_key, window) >= n:
         return _back(f"/gate?next={quote(next)}", "输错次数过多，请 10 分钟后再试")
+    ip_key = f"gi:{request.state.ip}" if request.state.ip else None
+    if ip_key and limiter.count(ip_key, config.RL_GATE_IP[1]) >= config.RL_GATE_IP[0]:
+        return _back(f"/gate?next={quote(next)}", "尝试太频繁，请一分钟后再试")
     if not config.ACCESS_CODE or not hmac.compare_digest(code.strip().lower().encode(), config.ACCESS_CODE.lower().encode()):
-        for k in keys:
-            limiter.hit(k)
+        limiter.hit(dev_key)
+        if ip_key:
+            limiter.hit(ip_key)
         await asyncio.sleep(1)  # 输错延迟 1 秒，增加暴力猜测成本
         return _back(f"/gate?next={quote(next)}", "口令不对")
     resp = RedirectResponse(next, status_code=303)
@@ -123,9 +159,12 @@ async def gate_submit(request: Request, code: str = Form(""), next: str = Form("
 
 
 @app.exception_handler(sqlite3.OperationalError)
-def db_busy(request: Request, exc: sqlite3.OperationalError):
-    """写锁排队超时（极端高峰）时，给用户一个可以重试的提示，而不是 500。"""
-    return _notice(request, "请求过多", "操作未生效，请稍后重试。", 503)
+def db_error(request: Request, exc: sqlite3.OperationalError):
+    """写锁排队超时（极端高峰）时，给用户一个可以重试的提示，而不是 500。其他数据库错误照常当作 500 记日志。"""
+    if "locked" in str(exc) or "busy" in str(exc):
+        return _notice(request, "请求过多", "操作未生效，请稍后重试。", 503)
+    log.exception("database error on %s %s", request.method, request.url.path)
+    return _notice(request, "出错了", "服务器内部错误，请稍后再试；持续出现请联系管理员。", 500)
 
 
 # ---------------------------------------------------------------- 工具函数
@@ -160,6 +199,7 @@ def _render(request: Request, name: str, **ctx) -> HTMLResponse:
         groups=config.GROUPS,
         deadline=config.DEADLINE,
         lmcore_url=config.LMCORE_URL,
+        base_url=_base_url(request),
     )
     return templates.TemplateResponse(request, name, ctx)
 
@@ -220,7 +260,8 @@ def pool_live(request: Request, rev: int = -1, m: int = 0):
         resp = Response(status_code=204)
     else:
         view = svc.pool_view(me["id"])
-        resp = templates.TemplateResponse(request, "_pool_body.html", {"me": me, "v": view})
+        resp = templates.TemplateResponse(request, "_pool_body.html",
+                                          {"me": me, "v": view, "base_url": _base_url(request)})
         resp.headers["X-Rev"] = str(current)
         chats = svc.chat_peers(me["id"])  # 方案生成 / 退回 / 完成时对话会变
         resp.headers["X-Chats"] = json.dumps([{"pair": p, "peer": name} for p, name in chats])
@@ -253,7 +294,10 @@ def register(request: Request, nickname: str = Form(...), grp: str = Form(...), 
 @app.post("/me/group")
 def change_group(request: Request, grp: str = Form(...)):
     me = _me(request)
-    return _run(svc.change_group, me["id"], grp) if me else _back("/")
+    if not me:
+        return _back("/")
+    dest = "/pool" if me["pool_id"] else "/"
+    return _run(svc.change_group, me["id"], grp, ok=dest, fail=dest)
 
 
 @app.get("/login/{token}")
@@ -296,6 +340,21 @@ def pool_leave(request: Request):
     return _run(svc.leave_pool, me["id"], ok="/", fail="/pool") if me else _back("/")
 
 
+@app.post("/pool/count")
+def pool_count(request: Request, lm_count: int = Form(...)):
+    return _pool_action(request, svc.set_group_count, lm_count)
+
+
+@app.post("/pool/ghost/add")
+def pool_ghost_add(request: Request):
+    return _pool_action(request, svc.add_ghost)
+
+
+@app.post("/pool/ghost/remove")
+def pool_ghost_remove(request: Request, ghost_id: str = Form(...)):
+    return _pool_action(request, svc.remove_ghost, ghost_id)
+
+
 @app.post("/pool/wish")
 def pool_wish(request: Request, to_id: str = Form(...), want: int = Form(...)):
     return _pool_action(request, svc.set_wish, to_id, bool(want))
@@ -314,6 +373,11 @@ def pool_approve(request: Request):
 @app.post("/pool/reject")
 def pool_reject(request: Request):
     return _pool_action(request, svc.reject)
+
+
+@app.post("/pool/abort")
+def pool_abort(request: Request):
+    return _pool_action(request, svc.abort)
 
 
 @app.post("/pool/act")
@@ -354,7 +418,13 @@ if config.DEV_MODE:
 
 
 def _admin_ok(request: Request) -> bool:
-    return config.DEV_MODE or (config.ADMIN_KEY and request.query_params.get("key") == config.ADMIN_KEY)
+    key = request.query_params.get("key", "")
+    return config.DEV_MODE or bool(config.ADMIN_KEY and hmac.compare_digest(key, config.ADMIN_KEY))
+
+
+def _admin_path(request: Request) -> str:
+    key = request.query_params.get("key", "")
+    return f"/admin?key={quote(key)}" if key else "/admin"
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -364,12 +434,20 @@ def admin(request: Request):
     return _render(request, "admin.html", stats=svc.stats(), key=request.query_params.get("key", ""))
 
 
+@app.post("/admin/pool/delete")
+def admin_delete_pool(request: Request, pool_id: str = Form(...)):
+    if not _admin_ok(request):
+        return Response(status_code=404)
+    svc.delete_pool(pool_id)
+    return _back(_admin_path(request))
+
+
 @app.post("/admin/purge")
 def admin_purge(request: Request, confirm: str = Form("")):
     if not _admin_ok(request):
         return Response(status_code=404)
     if confirm != "删除":
-        return _back("/admin", "请输入“删除”二字确认")
+        return _back(_admin_path(request), "请输入“删除”二字确认")
     svc.purge()
     resp = _back("/")
     resp.delete_cookie(COOKIE)

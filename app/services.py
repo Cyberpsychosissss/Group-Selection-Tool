@@ -6,6 +6,9 @@ Web 层只调用这里；这里不关心 HTTP，也不写 SQL。
 - 每个写用例都在一个 BEGIN IMMEDIATE 事务里"重新读取最新状态 → 校验 → 写入"，
   不信任页面上可能已经过期的信息。
 - 所有用例都是幂等的：双击、网络重试、多个标签页重复提交，结果都和只提交一次相同。
+
+安全约定
+- 代号是用户输入；凡是拼进会用 |safe 渲染的 HTML 片段里（swap_text / todo），必须先 escape()。
 """
 import hashlib
 import secrets
@@ -13,12 +16,15 @@ import sqlite3
 from collections import Counter
 from typing import NamedTuple
 
+from markupsafe import escape
+
 from . import config
 from .domain import execution, pairing, solver, teams
 from .chat import Chat
 from .store import Repo, Store
 
 _CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # 去掉易混淆的 I L O 0 1
+GHOST_NAME = "占位（未加入）"
 
 
 class UserError(Exception):
@@ -35,6 +41,10 @@ def _new_id() -> str:
 
 def _new_code() -> str:
     return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(8))
+
+
+def _display(m) -> str:
+    return GHOST_NAME if m["ghost"] else m["nickname"]
 
 
 INSTRUCTIONS = {
@@ -64,6 +74,7 @@ class ExecState(NamedTuple):
     done: dict[str, int]
     in_team: set[str]
     plan: dict[str, object]
+    names: dict[str, str]  # 方案里所有人（含已退出完成池的人）的显示名
 
 
 class Service:
@@ -99,17 +110,34 @@ class Service:
             return r.member_by_token(_hash(token))
 
     def change_group(self, member_id: str, grp: str) -> None:
+        """改组号。不在池里随时可改；在已完成的池里会自动退出再改；
+        中止执行后暂时无组的人可以改成池内的某个组（表示已在 LM Core 加入了它）。"""
         self._check_group(grp)
         with self.store.tx() as r:
-            if r.member(member_id)["pool_id"]:
-                raise UserError("已经在池里时不能改组号，请先退出池")
+            me = r.member(member_id)
+            if me["pool_id"]:
+                pool = r.pool(me["pool_id"])
+                if pool["state"] == "done":
+                    self._leave(r, me, pool)
+                elif pool["state"] == "open" and me["grp"] is None:
+                    pg = r.pool_of_group(grp)
+                    if not pg or pg["pool_id"] != pool["id"]:
+                        raise UserError("只能改成池内的组（先在 LM Core 加入它）；要去池外的组请先退出池")
+                    r.set_member_group(member_id, grp)
+                    r.set_group_count(pool["id"], grp, pg["lm_count"] + 1)
+                    r.add_event(pool["id"], f"{me['nickname']} 加入 {grp}")
+                    r.bump(pool["id"])
+                    return
+                else:
+                    raise UserError("已经在池里时不能改组号，请先退出池")
             r.set_member_group(member_id, grp)
 
     def login_as(self, member_id: str) -> str:
         """开发模式：切换身份（给该成员换一个新 token）。"""
         token = secrets.token_urlsafe(24)
         with self.store.tx() as r:
-            if not r.member(member_id):
+            me = r.member(member_id)
+            if not me or me["ghost"]:
                 raise UserError("没有这个成员")
             r.set_member_token(member_id, _hash(token))
         return token
@@ -126,7 +154,7 @@ class Service:
 
     def create_pool(self, member_id: str, lm_count: int) -> str:
         with self.store.tx() as r:
-            me = r.member(member_id)
+            me = self._release_done(r, r.member(member_id))
             if me["pool_id"]:  # 重复提交：已经建好了
                 return r.pool(me["pool_id"])["code"]
             pool_id, code = _new_id(), _new_code()
@@ -143,6 +171,7 @@ class Service:
                 raise UserError("邀请码不存在，请检查是否输错")
             if me["pool_id"] == pool["id"]:  # 重复提交
                 return
+            me = self._release_done(r, me)
             if me["pool_id"]:
                 raise UserError("你已经在另一个池里了，请先退出那个池")
             if pool["state"] != "open":
@@ -157,7 +186,8 @@ class Service:
         if pg:
             joined = sum(m["grp"] == grp for m in r.pool_members(pool["id"]))
             if joined >= pg["lm_count"]:
-                raise UserError(f"{grp} 组在池里已经有 {joined} 人，等于 LM Core 上的人数。请检查你的组号是否填对")
+                raise UserError(f"{grp} 组在池里已经有 {joined} 人，等于登记的本组人数。"
+                                "请检查你的组号是否填对；人数填少了可以让组里的人在池页面更正")
         else:
             if not 1 <= lm_count <= config.CAPACITY:
                 raise UserError("组人数应在 1–5 之间")
@@ -166,23 +196,89 @@ class Service:
         r.add_event(pool["id"], f"{me['nickname']}（{grp}）加入")
         r.bump(pool["id"])
 
+    def _release_done(self, r: Repo, me):
+        """在已完成的池里 → 自动退出，返回刷新后的成员行。"""
+        if me["pool_id"]:
+            pool = r.pool(me["pool_id"])
+            if pool["state"] == "done":
+                self._leave(r, me, pool)
+                return r.member(me["id"])
+        return me
+
     def leave_pool(self, member_id: str) -> None:
+        """退出池：互选阶段和完成后都可以；方案生成后到完成前不行（执行中请用"中止执行"）。"""
         with self.store.tx() as r:
             me = r.member(member_id)
             if not me["pool_id"]:  # 重复提交
                 return
             pool = r.pool(me["pool_id"])
+            if pool["state"] not in ("open", "done"):
+                raise UserError("方案生成以后不能退出池；执行出了问题可以点“中止执行”退回互选")
+            self._leave(r, me, pool)
+
+    def _leave(self, r: Repo, me, pool) -> None:
+        r.delete_wishes_of(me["id"])
+        r.set_member_pool(me["id"], None)
+        rest = r.pool_members(pool["id"])
+        if pool["state"] == "open" and me["grp"] and not any(m["grp"] == me["grp"] and not m["ghost"] for m in rest):
+            r.delete_ghosts(pool["id"], me["grp"])  # 本组没有真人了：占位一起撤掉，组从池里移除
+            r.delete_pool_group(pool["id"], me["grp"])
+        if not any(not m["ghost"] for m in rest):
+            r.delete_pool(pool["id"])
+            self.chat.close_pool(pool["id"])
+            return
+        r.add_event(pool["id"], f"{me['nickname']}（{me['grp'] or '无组'}）退出")
+        r.bump(pool["id"])
+
+    def set_group_count(self, member_id: str, lm_count: int) -> None:
+        """更正本组在 LM Core 上的人数（首个加入者填错时用）。只能在互选阶段改，不能少于已加入的人数。"""
+        with self.store.tx() as r:
+            me, pool = self._my_pool(r, member_id)
             if pool["state"] != "open":
-                raise UserError("方案生成以后不能退出池")
-            r.delete_wishes_of(member_id)
-            r.set_member_pool(member_id, None)
-            rest = r.pool_members(pool["id"])
-            if not any(m["grp"] == me["grp"] for m in rest):
-                r.delete_pool_group(pool["id"], me["grp"])
-            if not rest:
-                r.delete_pool(pool["id"])
+                raise UserError("方案已经生成，不能再改本组人数")
+            if not me["grp"]:
+                raise UserError("你现在没有组")
+            joined = sum(m["grp"] == me["grp"] for m in r.pool_members(pool["id"]))
+            if not max(1, joined) <= lm_count <= config.CAPACITY:
+                raise UserError(f"本组人数应在 {max(1, joined)}–{config.CAPACITY} 之间（已加入 {joined} 人）")
+            pg = r.pool_of_group(me["grp"])
+            if pg["lm_count"] == lm_count:
                 return
-            r.add_event(pool["id"], f"{me['nickname']}（{me['grp']}）退出")
+            r.set_group_count(pool["id"], me["grp"], lm_count)
+            r.add_event(pool["id"], f"{me['nickname']} 把 {me['grp']} 组人数改为 {lm_count}")
+            r.bump(pool["id"])
+
+    def add_ghost(self, member_id: str) -> None:
+        """给本组加一个占位：组里有人不肯加入时，用占位代表他——占着位置、不动、不参与互选和确认。"""
+        with self.store.tx() as r:
+            me, pool = self._my_pool(r, member_id)
+            if pool["state"] != "open":
+                raise UserError("方案已经生成，不能再加占位")
+            if not me["grp"]:
+                raise UserError("你现在没有组")
+            members = r.pool_members(pool["id"])
+            joined = sum(m["grp"] == me["grp"] for m in members)
+            pg = r.pool_of_group(me["grp"])
+            if joined >= pg["lm_count"]:
+                raise UserError(f"{me['grp']} 组已经到齐（{joined}/{pg['lm_count']}），不需要占位")
+            gid = _new_id()
+            r.insert_member(gid, f"占位·{me['grp']}·{gid[:4]}", me["grp"], _hash(secrets.token_urlsafe(24)),
+                            pool_id=pool["id"], ghost=True)
+            r.add_event(pool["id"], f"{me['nickname']} 为 {me['grp']} 组添加占位（代表没加入的组员）")
+            r.bump(pool["id"])
+
+    def remove_ghost(self, member_id: str, ghost_id: str) -> None:
+        with self.store.tx() as r:
+            me, pool = self._my_pool(r, member_id)
+            if pool["state"] != "open":
+                raise UserError("方案已经生成，不能再改占位")
+            g = r.member(ghost_id)
+            if not g or not g["ghost"] or g["pool_id"] != pool["id"]:  # 已经删过了
+                return
+            if g["grp"] != me["grp"]:
+                raise UserError("只能删除本组的占位")
+            r.delete_member(ghost_id)
+            r.add_event(pool["id"], f"{me['nickname']} 删除 {me['grp']} 组的一个占位")
             r.bump(pool["id"])
 
     def set_wish(self, member_id: str, to_id: str, want: bool) -> None:
@@ -192,7 +288,7 @@ class Service:
             if pool["state"] != "open":
                 raise UserError("方案已经生成，不能再修改互选")
             other = r.member(to_id)
-            if not other or other["pool_id"] != pool["id"] or to_id == member_id:
+            if not other or other["pool_id"] != pool["id"] or to_id == member_id or other["ghost"]:
                 raise UserError("只能选择同一个池里的其他人")
             if want == r.has_wish(member_id, to_id):
                 return
@@ -215,22 +311,26 @@ class Service:
                 return
             members = r.pool_members(pool["id"])
             groups = r.pool_groups(pool["id"])
-            all_teams = teams.build_teams([m["id"] for m in members], r.wishes(pool["id"]))
+            humans = [m for m in members if not m["ghost"]]
+            all_teams = teams.build_teams([m["id"] for m in humans], r.wishes(pool["id"]))
             blockers = self._blockers(members, groups, all_teams)
             if blockers:
                 raise UserError("还不能生成方案：" + "；".join(blockers))
-            current = {m["id"]: m["grp"] for m in members}
+            current = {m["id"]: m["grp"] for m in humans}
+            fixed = Counter(m["grp"] for m in members if m["ghost"])
             try:
-                target = solver.solve(current, [g["grp"] for g in groups], all_teams, config.CAPACITY)
+                target = solver.solve(current, [g["grp"] for g in groups], all_teams, config.CAPACITY, fixed)
             except solver.Infeasible as e:
                 raise UserError(f"这个池凑不出方案：{e}") from e
             in_team = {m for t in all_teams if len(t) > 1 for m in t}
             for m in members:
-                r.insert_plan(pool["id"], m["id"], m["grp"], target[m["id"]], m["id"] in in_team)
+                if m["ghost"]:
+                    r.insert_plan(pool["id"], m["id"], m["grp"], m["grp"], False, approved=True)
+                else:
+                    r.insert_plan(pool["id"], m["id"], m["grp"], target[m["id"]], m["id"] in in_team)
             movers = sum(current[m] != target[m] for m in current)
             if movers == 0:
-                r.set_pool_state(pool["id"], "done")
-                r.add_event(pool["id"], "当前分组已满足所有互选，无需移动")
+                self._finish(r, pool["id"], "当前分组已满足所有互选，无需移动")
             else:
                 r.set_pool_state(pool["id"], "confirming")
                 r.add_event(pool["id"], f"{me['nickname']} 生成方案：移动 {movers} 人")
@@ -259,11 +359,33 @@ class Service:
             if pool["state"] == "open":  # 已经被退回了
                 return
             if pool["state"] != "confirming":
-                raise UserError("方案已经开始执行，不能再退回")
+                raise UserError("方案已经开始执行，不能再退回；执行出了问题请用“中止执行”")
             r.delete_plan(pool["id"])
             r.set_pool_state(pool["id"], "open")
             r.add_event(pool["id"], f"{me['nickname']} 不同意，退回互选")
             r.bump(pool["id"])
+
+    def abort(self, member_id: str) -> None:
+        """执行中出了问题（有人操作错、失联、目标组被池外的人占了）：中止执行，退回互选。
+        方案作废、互选保留；各组人数改成此刻实际在组里的人数；已经退出组的人暂时无组，
+        要在 LM Core 加入池内某个组后在池页面更新组号，之后才能重新生成方案。"""
+        with self.store.tx() as r:
+            me, pool = self._my_pool(r, member_id)
+            if pool["state"] == "open":  # 已经有人中止了
+                return
+            if pool["state"] != "executing":
+                raise UserError("只有执行中才能中止")
+            members = r.pool_members(pool["id"])
+            counts = Counter(m["grp"] for m in members if m["grp"])
+            for g in r.pool_groups(pool["id"]):
+                r.set_group_count(pool["id"], g["grp"], counts[g["grp"]])
+            homeless = [m["nickname"] for m in members if m["grp"] is None]
+            r.delete_plan(pool["id"])
+            r.set_pool_state(pool["id"], "open")
+            r.add_event(pool["id"], f"{me['nickname']} 中止执行，退回互选；各组人数已按当前状态更新"
+                        + (f"；暂无组：{'、'.join(homeless)}" if homeless else ""))
+            r.bump(pool["id"])
+        self.chat.close_pool(pool["id"])
 
     # ------------------------------------------------------------------ 池：执行
 
@@ -305,14 +427,20 @@ class Service:
                     note += "这次交换完成。"
             finished = execution.is_done(st.swaps, done)
             if finished:
-                r.set_pool_state(pool["id"], "done")
-                r.add_event(pool["id"], "全部完成")
+                self._finish(r, pool["id"], "全部完成")
             r.bump(pool["id"])
         # 事务提交成功后才发消息；池完成后整池的临时对话直接删除
         if finished:
             self.chat.close_pool(pool["id"])
         elif note:
             self.chat.post(self.chat.open(pool["id"], member_id, partner), member_id, me["nickname"], note)
+
+    @staticmethod
+    def _finish(r: Repo, pool_id: str, text: str) -> None:
+        """池完成：各组释放（可以参加新的池），成员随时可以退出；方案和记录保留供查看。"""
+        r.set_pool_state(pool_id, "done")
+        r.delete_pool_groups(pool_id)
+        r.add_event(pool_id, text + "。各组已释放，退出池后可以参加新的池")
 
     def send_quick(self, member_id: str, kind: str, pair: str) -> None:
         """在一对一对话里发一条预设短语。"""
@@ -323,7 +451,9 @@ class Service:
             raise UserError("这个对话已经结束")
         with self.store.read() as r:
             me = r.member(member_id)
-            _, dst = r.plan_row(me["pool_id"], member_id)
+            st = self._exec_state(r, me["pool_id"])
+        i = execution.current_swap(st.swaps, st.done, member_id)
+        dst = st.swaps[i].route(member_id)[1] if i is not None else st.plan[member_id]["to_grp"]
         self.chat.post(pair, member_id, me["nickname"], QUICK_NOTES[kind][1].format(dst=dst))
 
     def chat_peers(self, member_id: str) -> list[tuple[str, str]]:
@@ -337,16 +467,20 @@ class Service:
             if pool["state"] not in ("confirming", "executing"):
                 return []
             st = self._exec_state(r, pool["id"])
-            names = {m["id"]: m["nickname"] for m in r.pool_members(pool["id"])}
         mine = execution.member_swaps(st.swaps).get(member_id, [])
         i = execution.current_swap(st.swaps, st.done, member_id)
         if i is None and mine:
             i = mine[-1]
         partner = st.swaps[i].partner(member_id) if i is not None else None
-        return [(self.chat.open(pool["id"], member_id, partner), names[partner])] if partner else []
+        return [(self.chat.open(pool["id"], member_id, partner), st.names[partner])] if partner else []
 
     def chat_since(self, member_id: str, after: int) -> list[dict]:
-        return self.chat.since(member_id, after)
+        """只返回当前对话里的新消息（换过搭档的人不会收到旧搭档发来、但页面上已经没有入口的消息）。"""
+        msgs = self.chat.since(member_id, after)
+        if not msgs:
+            return []
+        allowed = {p for p, _ in self.chat_peers(member_id)}
+        return [m for m in msgs if m["pair"] in allowed]
 
     # ------------------------------------------------------------------ 查询
 
@@ -368,8 +502,8 @@ class Service:
             st = self._exec_state(r, pool["id"])
             events = r.events(pool["id"])
 
-        names = {m["id"]: m["nickname"] for m in members}
-        all_teams = teams.build_teams(list(names), wishes)
+        names = {m["id"]: _display(m) for m in members}
+        all_teams = teams.build_teams([m["id"] for m in members if not m["ghost"]], wishes)
         view = {
             "pool": pool,
             "me": me,
@@ -382,21 +516,27 @@ class Service:
         if pool["state"] == "open":
             view.update(self._open_view(me, members, groups, wishes, all_teams))
         elif st.plan:
-            view.update(self._plan_view(member_id, names, st, pool["state"]))
+            view.update(self._plan_view(member_id, st, pool["state"]))
         return view
 
     def _open_view(self, me, members, groups, wishes, all_teams) -> dict:
         mid = me["id"]
         mine = {b for a, b in wishes if a == mid}
-        joined = Counter(m["grp"] for m in members)
+        joined = Counter(m["grp"] for m in members if m["grp"])
         missing = {g["grp"]: g["lm_count"] - joined[g["grp"]] for g in groups if joined[g["grp"]] < g["lm_count"]}
+        homeless = [m for m in members if m["grp"] is None]
         blockers = self._blockers(members, groups, all_teams)
         in_team = any(len(t) > 1 and mid in t for t in all_teams)
         wishes_open = self._all_present(members, groups)
-        if len(groups) < MIN_GROUPS:
+        if me["grp"] is None:
+            todo = "你暂时无组：先在 LM Core 加入池内的某个组，然后在下方更新组号。"
+        elif len(groups) < MIN_GROUPS:
             todo = f"邀请其他组加入：至少需要 {MIN_GROUPS} 个组。"
         elif me["grp"] in missing:
-            todo = f"把邀请链接发到 {me['grp']} 组群：还差 {missing[me['grp']]} 人。"
+            todo = (f"把邀请链接发到 {me['grp']} 组群：还差 {missing[me['grp']]} 人。"
+                    "有人不肯加入可以添加占位，人数填错可以更正。")
+        elif homeless:
+            todo = "等待暂无组的人更新组号：" + "、".join(m["nickname"] for m in homeless)
         elif not wishes_open:
             todo = "等待所有组到齐后开放互选：" + "，".join(f"{g} 还差 {n} 人" for g, n in missing.items())
         elif not mine and not in_team:
@@ -409,23 +549,27 @@ class Service:
             todo = "条件已满足，可以生成方案。"
         return {
             "groups": [
-                {"grp": g["grp"], "lm_count": g["lm_count"], "members": [m for m in members if m["grp"] == g["grp"]]}
+                {"grp": g["grp"], "lm_count": g["lm_count"],
+                 "members": [m for m in members if m["grp"] == g["grp"]], "mine": g["grp"] == me["grp"]}
                 for g in groups
             ],
+            "homeless": homeless,
+            "pool_group_names": [g["grp"] for g in groups],
             "wishes_open": wishes_open,
             "my_wishes": mine,
             "wished_by": {a for a, b in wishes if b == mid},
             "blockers": blockers,
             "checks": [
                 (len(groups) >= MIN_GROUPS, f"至少 {MIN_GROUPS} 个组（现 {len(groups)} 个）"),
-                (not missing, "各组成员到齐" if not missing
+                (not missing and not homeless, "各组成员到齐" if not missing
                  else "各组成员到齐（" + "，".join(f"{g} 还差 {n} 人" for g, n in missing.items()) + "）"),
                 (not teams.oversized(all_teams), "小队不超过 5 人"),
             ],
-            "todo": todo,
+            "todo": escape(todo),
         }
 
-    def _plan_view(self, member_id, names, st: ExecState, state) -> dict:
+    def _plan_view(self, member_id, st: ExecState, state) -> dict:
+        names = st.names
         actions = (execution.next_actions(st.swaps, st.cur, st.done, st.in_team, config.CAPACITY)
                    if state == "executing" else {})
         order = execution.member_swaps(st.swaps)
@@ -472,7 +616,7 @@ class Service:
             else:
                 todo = "等待中。轮到你时此处会提示，不要提前操作。"
         else:
-            todo = "已完成。请在 LM Core 核对 Your selection。"
+            todo = "已完成。请在 LM Core 核对 Your selection。想再换一轮请先退出池。"
         instruction = None
         if my_action:
             src, dst = st.swaps[my_action[1]].route(member_id)
@@ -493,14 +637,16 @@ class Service:
             "movers_done": sum(x["status"] == "done" for x in movers),
             "swaps": sum(1 for s in st.swaps if s.b),
             "live_counts": dict(sorted(Counter(g for g in st.cur.values() if g).items())),
-            "todo": todo,
+            "todo": escape(todo),
         }
 
     @staticmethod
     def _swap_text(row: dict) -> str:
+        """给模板用 |safe 渲染的 HTML 片段：代号是用户输入，必须 escape。"""
         if not row["moved"]:
-            return f"留在 {row['to']} 组，无需操作。"
-        parts = [f"与 <b>{name}</b> 互换（你 {src}→{dst}）" if name else f"你 {src}→{dst}（进空位，单独移动）"
+            return f"留在 {escape(row['to'])} 组，无需操作。"
+        parts = [f"与 <b>{escape(name)}</b> 互换（你 {escape(src)}→{escape(dst)}）" if name
+                 else f"你 {escape(src)}→{escape(dst)}（进空位，单独移动）"
                  for src, dst, name in row["steps"]]
         if len(parts) == 1:
             return parts[0] + "。"
@@ -511,7 +657,15 @@ class Service:
     def stats(self) -> dict:
         with self.store.read() as r:
             pools = r.all_pools()
-            return {"members": len(r.all_members()), "pools": Counter(p["state"] for p in pools)}
+            return {"members": len(r.all_members()), "pools": Counter(p["state"] for p in pools),
+                    "pool_list": pools}
+
+    def delete_pool(self, pool_id: str) -> None:
+        """管理员删除一个池：成员回到未加入状态，方案、互选、记录全部删除。"""
+        with self.store.tx() as r:
+            if r.pool(pool_id):
+                r.delete_pool(pool_id)
+        self.chat.close_pool(pool_id)
 
     def purge(self) -> None:
         with self.store.tx() as r:
@@ -541,19 +695,24 @@ class Service:
         start = Counter(p["from_grp"] for p in plan.values())  # 方案生成时各组人数（池是封闭的）
         final = Counter(p["to_grp"] for p in plan.values())
         free = {g for g in start if max(start[g], final[g]) < config.CAPACITY}  # 执行全程都有空位的组
+        members = r.plan_members(pool_id) if plan else r.pool_members(pool_id)
+        # 完成后退出池的人：此刻的组以方案里的目标组为准（他可能已经去了别的池）
+        cur = {m["id"]: m["grp"] if m["pool_id"] == pool_id else plan[m["id"]]["to_grp"] for m in members}
         return ExecState(
             swaps=pairing.build_swaps(moves, in_team, free),
-            cur={m["id"]: m["grp"] for m in r.pool_members(pool_id)},
+            cur=cur,
             done={m: p["moves_done"] for m, p in plan.items()},
             in_team=in_team,
             plan=plan,
+            names={m["id"]: _display(m) for m in members},
         )
 
     @staticmethod
     def _all_present(members, groups) -> bool:
-        """池里至少有 MIN_GROUPS 个组，并且每个组的全部成员都已加入。"""
-        joined = Counter(m["grp"] for m in members)
-        return len(groups) >= MIN_GROUPS and all(joined[g["grp"]] >= g["lm_count"] for g in groups)
+        """池里至少有 MIN_GROUPS 个组，每个组的全部成员（含占位）都已加入，并且没有人暂时无组。"""
+        joined = Counter(m["grp"] for m in members if m["grp"])
+        return (len(groups) >= MIN_GROUPS and all(m["grp"] for m in members)
+                and all(joined[g["grp"]] >= g["lm_count"] for g in groups))
 
     @staticmethod
     def _blockers(members, groups, all_teams) -> list[str]:
@@ -564,7 +723,10 @@ class Service:
             joined = sum(m["grp"] == g["grp"] for m in members)
             if joined < g["lm_count"]:
                 blockers.append(f"{g['grp']} 组还差 {g['lm_count'] - joined} 人（{joined}/{g['lm_count']}）")
-        names = {m["id"]: m["nickname"] for m in members}
+        homeless = [m["nickname"] for m in members if m["grp"] is None]
+        if homeless:
+            blockers.append("暂无组（需先在 LM Core 加入池内的组并更新组号）：" + "、".join(homeless))
+        names = {m["id"]: _display(m) for m in members}
         for t in teams.oversized(all_teams):
             blockers.append("小队超过 5 人：" + "、".join(names[i] for i in t) + "（需取消部分互选）")
         return blockers
